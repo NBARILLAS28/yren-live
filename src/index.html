@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YREN LIVE</title>
+  <link rel="icon" href="assets/favicon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="assets/glyph.png" alt="" class="brand-mark">
+      <div class="brand-text">
+        <div class="brand-name">YREN<span>LIVE</span></div>
+        <div class="brand-sub">Audio Sequence System</div>
+      </div>
+    </div>
+
+    <div class="setlist-bar">
+      <label class="lbl" for="setlistSel">Setlist</label>
+      <select id="setlistSel" aria-label="Setlist"></select>
+      <button class="btn ghost sm" id="btnNewSetlist" title="Nuevo setlist">+ Nuevo</button>
+      <button class="btn ghost sm" id="btnRenameSetlist">Renombrar</button>
+      <button class="btn ghost sm danger" id="btnDelSetlist">Eliminar</button>
+    </div>
+
+    <div class="top-right">
+      <span class="status-pill" id="outPill" title="Salida de audio actual">Audio…</span>
+      <button class="btn ghost" id="btnLibrary">Biblioteca</button>
+      <button class="btn" id="btnSettings">⚙ Audio</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- ───────── Setlist ───────── -->
+    <aside class="panel setlist">
+      <div class="panel-head">
+        <h2>Canciones</h2>
+        <span class="muted" id="setlistTotal"></span>
+      </div>
+      <ol id="songList" class="song-list"></ol>
+      <div class="add-row">
+        <button class="btn" id="btnAddFiles">+ Canción (stems)</button>
+        <button class="btn ghost" id="btnAddFolder" title="Una carpeta = una canción">+ Carpeta</button>
+      </div>
+      <label class="check auto-next"><input type="checkbox" id="autoNext"> Pasar a la siguiente canción al terminar</label>
+      <p class="hint">También puedes arrastrar los archivos de audio aquí.</p>
+      <input type="file" id="fileInput" accept="audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg,.aif,.aiff" multiple hidden>
+      <input type="file" id="folderInput" webkitdirectory hidden>
+    </aside>
+
+    <!-- ───────── Escenario ───────── -->
+    <section class="stage">
+      <div class="now panel">
+        <div class="now-info">
+          <div class="now-title" id="nowTitle">Sin canción</div>
+          <div class="now-artist muted" id="nowArtist">Agrega una canción con sus stems para empezar</div>
+        </div>
+        <div class="now-chips">
+          <div class="chip big"><span class="chip-k">TONO</span><span class="chip-v" id="chipKey">—</span></div>
+          <div class="chip big"><span class="chip-k">BPM</span><span class="chip-v" id="chipBpm">—</span></div>
+          <button class="btn ghost" id="btnEdit" disabled>Editar</button>
+        </div>
+      </div>
+
+      <div class="transport panel">
+        <div class="t-buttons">
+          <button class="tbtn" id="btnPrev" title="Canción anterior">⏮</button>
+          <button class="tbtn play" id="btnPlay" title="Reproducir / Pausa (Espacio)">▶</button>
+          <button class="tbtn" id="btnStop" title="Detener">■</button>
+          <button class="tbtn" id="btnNext" title="Siguiente canción">⏭</button>
+        </div>
+        <div class="clock"><span id="timeCur">0:00.0</span><span class="muted"> / </span><span id="timeTotal" class="muted">0:00.0</span></div>
+        <div class="t-sections">
+          <button class="btn ghost" id="btnPrevSec" title="Sección anterior">‹ Sección</button>
+          <button class="btn ghost" id="btnNextSec" title="Sección siguiente">Sección ›</button>
+          <button class="btn toggle" id="btnLoop" title="Repetir la sección actual">⟳ Bucle</button>
+          <div class="seg" id="jumpMode" role="group" aria-label="Modo de salto">
+            <button data-mode="end" class="on" title="El salto ocurre al terminar la sección actual">Al terminar</button>
+            <button data-mode="now" title="El salto ocurre de inmediato">Ya</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="wave-wrap panel">
+        <canvas id="wave" title="Clic en la onda = ir a ese punto"></canvas>
+        <div class="sec-line">
+          <div id="secChips" class="sec-chips" title="Toca una sección: en modo “Al terminar” el salto ocurre cuando acaba la sección actual"></div>
+          <button class="btn ghost sm" id="btnAddSection" title="Marca una sección nueva en la posición actual">+ Sección aquí</button>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="panel ctl">
+          <div class="ctl-title">Tonalidad</div>
+          <div class="ctl-row">
+            <button class="rbtn" id="keyDown" aria-label="Bajar medio tono">−</button>
+            <div class="key-big" id="keyBig">—</div>
+            <button class="rbtn" id="keyUp" aria-label="Subir medio tono">+</button>
+          </div>
+          <div class="ctl-row small">
+            <span class="muted">Original <b id="keyOrig">—</b></span>
+            <span class="muted" id="keySemis">0 st</span>
+            <select id="keySel" aria-label="Ir a tonalidad"></select>
+            <button class="btn ghost sm" id="keyReset">Original</button>
+          </div>
+        </div>
+
+        <div class="panel ctl">
+          <div class="ctl-title">Tempo</div>
+          <div class="ctl-row">
+            <button class="rbtn" id="tempoDown" aria-label="Más lento">−</button>
+            <div class="key-big"><span id="tempoVal">100</span><small>%</small></div>
+            <button class="rbtn" id="tempoUp" aria-label="Más rápido">+</button>
+          </div>
+          <div class="ctl-row small">
+            <span class="muted"><b id="bpmVal">—</b> BPM</span>
+            <input type="range" id="tempoRange" min="70" max="130" step="1" value="100" aria-label="Tempo">
+            <button class="btn ghost sm" id="tempoReset">100%</button>
+          </div>
+        </div>
+
+        <div class="panel ctl pad">
+          <div class="ctl-title">Pad ambiental</div>
+          <div class="ctl-row">
+            <button class="btn toggle wide" id="padToggle">PAD apagado</button>
+            <div class="key-big mid" id="padKeyLabel">—</div>
+          </div>
+          <div class="ctl-row small">
+            <label class="check"><input type="checkbox" id="padMon" checked> También al monitor</label>
+            <label class="check"><input type="checkbox" id="padFollow" checked> Seguir tonalidad</label>
+          </div>
+          <div class="ctl-row small">
+            <span class="muted">Nota</span>
+            <select id="padRoot" aria-label="Nota del pad"></select>
+            <span class="muted">Vol</span>
+            <input type="range" id="padVol" min="0" max="100" value="55" aria-label="Volumen del pad">
+          </div>
+        </div>
+      </div>
+
+      <div class="mixer panel">
+        <div class="mixer-head">
+          <h2>Mezclador</h2>
+          <span class="muted small">Cada pista va a <b>PRINCIPAL</b> (sala), <b>MONITOR</b> (in-ears) o <b>AMBOS</b>. <b>♯</b> = se transpone con la canción.</span>
+        </div>
+        <div class="strips" id="strips"></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="loading" id="loading" hidden><div class="spinner"></div><div id="loadingText">Cargando…</div></div>
+  <div class="dropzone" id="dropzone" hidden>Suelta los archivos de audio para crear una canción</div>
+
+  <!-- ───────── Diálogos ───────── -->
+  <dialog id="dlgSettings" class="dlg">
+    <form method="dialog" class="dlg-body" id="formSettings">
+      <h3>Salida de audio</h3>
+      <p class="muted small">Elige tu interfaz USB y a qué par de canales va cada mezcla. Normalmente: <b>Principal = 1-2</b> (sala) y <b>Monitor = 3-4</b> (click + guía a los in-ears).</p>
+      <label class="field">Dispositivo
+        <select id="devSel"></select>
+      </label>
+      <div class="row-btns">
+        <button type="button" class="btn ghost sm" id="btnDetectDev">Detectar nombres de dispositivos</button>
+        <span class="muted small" id="devInfo"></span>
+      </div>
+      <label class="field">Modo de salida
+        <select id="modeSel">
+          <option value="pairs">Pares separados (interfaz con 4+ salidas)</option>
+          <option value="split">Dividido: Monitor a la izquierda, Principal a la derecha (2 canales)</option>
+        </select>
+      </label>
+      <div class="grid2" id="pairsRow">
+        <label class="field">Principal (sala)
+          <select id="mainPair"></select>
+        </label>
+        <label class="field">Monitor (click + guía)
+          <select id="monPair"></select>
+        </label>
+      </div>
+      <p class="warn" id="outWarn" hidden></p>
+      <div class="dlg-actions">
+        <button class="btn ghost" value="close">Cerrar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlgEdit" class="dlg wide">
+    <form method="dialog" class="dlg-body" id="formEdit">
+      <h3>Editar canción</h3>
+      <div class="grid2">
+        <label class="field">Título<input type="text" id="edTitle"></label>
+        <label class="field">Artista / ministerio<input type="text" id="edArtist"></label>
+      </div>
+      <div class="grid3">
+        <label class="field">Tonalidad original
+          <div class="inline">
+            <select id="edKeyRoot"></select>
+            <label class="check"><input type="checkbox" id="edKeyMinor"> menor</label>
+          </div>
+        </label>
+        <label class="field">BPM original<input type="number" id="edBpm" min="30" max="260" step="0.1"></label>
+        <label class="field">Duración<input type="text" id="edDur" disabled></label>
+      </div>
+      <h4>Pistas (stems)</h4>
+      <div class="tracks-table" id="edTracks"></div>
+      <h4>Secciones</h4>
+      <div id="edSections" class="sections-edit"></div>
+      <div class="row-btns">
+        <button type="button" class="btn ghost sm" id="edAddSection">+ Sección en la posición actual</button>
+        <button type="button" class="btn ghost sm" id="edPresetSections">Plantilla típica (Intro / Verso / Coro…)</button>
+      </div>
+      <div class="dlg-actions split">
+        <button type="button" class="btn danger" id="edDelete">Eliminar canción de la biblioteca</button>
+        <div>
+          <button type="button" class="btn ghost" id="edRemoveFromSetlist">Quitar del setlist</button>
+          <button class="btn" value="ok" id="edSave">Guardar</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlgLibrary" class="dlg">
+    <form method="dialog" class="dlg-body">
+      <h3>Biblioteca</h3>
+      <p class="muted small">Todas las canciones guardadas en este Mac. Agrégalas al setlist actual.</p>
+      <div id="libList" class="lib-list"></div>
+      <div class="dlg-actions"><button class="btn ghost" value="close">Cerrar</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="dlgText" class="dlg small">
+    <form method="dialog" class="dlg-body" id="formText">
+      <h3 id="txtTitle">Nombre</h3>
+      <input type="text" id="txtInput" autocomplete="off">
+      <div class="dlg-actions">
+        <button class="btn ghost" value="cancel" id="txtCancel">Cancelar</button>
+        <button class="btn" value="ok" id="txtOk">Aceptar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlgConfirm" class="dlg small">
+    <form method="dialog" class="dlg-body">
+      <h3 id="cfTitle">¿Seguro?</h3>
+      <p id="cfText" class="muted"></p>
+      <div class="dlg-actions">
+        <button class="btn ghost" value="cancel">Cancelar</button>
+        <button class="btn danger" value="ok" id="cfOk">Aceptar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+{
+  "name": "yren-live",
+  "productName": "YREN LIVE",
+  "version": "0.1.0",
+  "description": "YREN LIVE — Audio Sequence System. Tu alabanza, en perfecta armonía.",
+  "main": "main.js",
+  "author": "Nery Barillas",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac dmg",
+    "dist:universal": "electron-builder --mac dmg --universal"
+  },
+  "build": {
+    "appId": "gt.diosdepactos.yrenlive",
+    "productName": "YREN LIVE",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.music",
+      "icon": "build/icon.png",
+      "target": [
+        "dmg"
+      ],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "YREN LIVE solo necesita este permiso para leer los nombres de tus salidas de audio (interfaz USB). No graba nada."
+      }
+    },
+    "dmg": {
+      "title": "YREN LIVE"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}
