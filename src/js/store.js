@@ -53,6 +53,18 @@ export const store = {
       t.onerror = () => reject(t.error);
     });
   },
+  /** [[clave, registro], …] de un almacén sin claves internas (por ejemplo, "files"). */
+  async getAllEntries(s) {
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const out = [];
+      const t = db.transaction(s, 'readonly');
+      const req = t.objectStore(s).openCursor();
+      req.onsuccess = () => { const c = req.result; if (c) { out.push([c.key, c.value]); c.continue(); } };
+      t.oncomplete = () => resolve(out);
+      t.onerror = () => reject(t.error);
+    });
+  },
   fileKey: (songId, trackId) => `${songId}:${trackId}`,
   getSetting: (key) => tx('kv', 'readonly', (o) => o.get(key)),
   setSetting: (key, value) => tx('kv', 'readwrite', (o) => o.put(value, key)),

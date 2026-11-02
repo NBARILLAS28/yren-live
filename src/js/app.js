@@ -2,6 +2,7 @@
 import { Engine } from './engine.js';
 import { store, requestPersistence } from './store.js';
 import * as U from './util.js';
+import * as Backup from './backup.js';
 
 const $ = (id) => document.getElementById(id);
 const engine = new Engine();
@@ -22,8 +23,12 @@ const state = {
     deviceId: 'default', mode: 'pairs', mainPair: 0, monitorPair: 1,
     jumpMode: 'end', autoNext: false, padMon: true, padFollow: true, padVol: 55, padRoot: 0,
     mainVol: 100, monVol: 100, live: false, deviceLabel: '',
+    fadeSec: 4, crossSec: 0, memBudgetMB: 1500, lastBackup: 0, backupSnooze: 0,
   },
   outLost: false,
+  inflight: new Map(), // songId → promesa de decodificación en curso
+  crossing: false,
+  preloadRun: 0,
 };
 
 const currentSetlist = () => state.setlists.find((s) => s.id === state.slId) || null;
@@ -40,10 +45,13 @@ function toast(msg, err = false) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), err ? 5000 : 2600);
 }
-function showLoading(text) {
+function showLoading(text, frac) {
   const el = $('loading');
-  if (text == null) { el.hidden = true; return; }
+  if (text == null) { el.hidden = true; $('loadingBarWrap').hidden = true; return; }
   $('loadingText').textContent = text;
+  const w = $('loadingBarWrap');
+  if (frac == null) w.hidden = true;
+  else { w.hidden = false; $('loadingBar').style.width = Math.round(U.clamp(frac, 0, 1) * 100) + '%'; }
   el.hidden = false;
 }
 function askText(title, value = '', okLabel = 'Aceptar') {
@@ -205,38 +213,91 @@ async function collectDropped(dt) {
 }
 
 // ───────────────────────── buffers (decodificados) ─────────────────────────
-async function getBuffers(song) {
+const DECODE_PARALLEL = 3;
+
+async function getBuffers(song, onProgress) {
+  const running = state.inflight.get(song.id);
+  if (running) { try { await running; } catch { /* se reintenta abajo */ } }
   let bufs = state.cache.get(song.id);
   if (!bufs) { bufs = new Map(); state.cache.set(song.id, bufs); }
-  for (const t of song.tracks) {
-    if (bufs.has(t.id)) continue;
-    const rec = await store.get('files', store.fileKey(song.id, t.id));
-    if (!rec) { toast(`Falta el archivo de la pista “${t.name}”`, true); continue; }
-    bufs.set(t.id, await engine.decode(rec.blob));
-  }
+  const todo = song.tracks.filter((t) => !bufs.has(t.id));
+  if (!todo.length) return bufs;
+  let next = 0, done = 0;
+  const worker = async () => {
+    while (next < todo.length) {
+      const t = todo[next++];
+      try {
+        const rec = await store.get('files', store.fileKey(song.id, t.id));
+        if (!rec) toast(`Falta el archivo de la pista “${t.name}”`, true);
+        else bufs.set(t.id, await engine.decode(rec.blob));
+      } finally { done++; if (onProgress) onProgress(done, todo.length); }
+    }
+  };
+  const p = Promise.all(Array.from({ length: Math.min(DECODE_PARALLEL, todo.length) }, worker));
+  state.inflight.set(song.id, p);
+  try { await p; } finally { if (state.inflight.get(song.id) === p) state.inflight.delete(song.id); }
   return bufs;
+}
+
+const songLoaded = (song) => { const b = state.cache.get(song.id); return !!b && song.tracks.every((t) => b.has(t.id)); };
+const songBytes = (id) => { const m = state.cache.get(id); let n = 0; if (m) for (const b of m.values()) n += Engine.bufferBytes(b); return n; };
+const cacheBytes = () => { let n = 0; for (const id of state.cache.keys()) n += songBytes(id); return n; };
+/** Estimación (por exceso) de lo que ocupará una canción en memoria si aún no se ha cargado. */
+function estSongBytes(song) {
+  if (songLoaded(song)) return songBytes(song.id);
+  const sr = engine.ctx ? engine.ctx.sampleRate : 48000;
+  return Math.round((song.duration || 240) * sr * 4 * 2 * song.tracks.length);
+}
+
+function renderMem() {
+  const el = $('memInfo');
+  if (!el) return;
+  const used = cacheBytes(), budget = state.settings.memBudgetMB * 1048576;
+  const loaded = [...state.songs.values()].filter(songLoaded).length;
+  el.textContent = state.cache.size ? `En memoria: ${Math.round(used / 1048576)} MB de ${state.settings.memBudgetMB} MB · ${loaded} lista${loaded === 1 ? '' : 's'}` : '';
+  el.classList.toggle('high', used > budget * 0.85);
 }
 
 function pruneCache(keepIds) {
   for (const id of [...state.cache.keys()]) if (!keepIds.has(id)) state.cache.delete(id);
+  renderMem();
 }
 
-function prefetchNext() {
+/** Decide qué canciones del setlist caben en la memoria disponible, libera el resto y precarga en orden las que faltan. */
+function planPreload() {
   const sl = currentSetlist();
-  if (!sl) return;
-  const keep = new Set();
-  const cur = currentItem(); if (cur) keep.add(cur.songId);
-  const nextItem = sl.items[state.idx + 1];
-  if (nextItem) keep.add(nextItem.songId);
+  const keep = new Set(), order = [];
+  if (!sl) return { keep, order };
+  const budget = state.settings.memBudgetMB * 1048576;
+  let used = 0;
+  const consider = (item, force) => {
+    const song = item && state.songs.get(item.songId);
+    if (!song || keep.has(song.id)) return true;
+    const b = estSongBytes(song);
+    if (!force && used + b > budget) return false;
+    keep.add(song.id); used += b;
+    if (!songLoaded(song)) order.push(song);
+    return true;
+  };
+  const cur = currentItem();
+  if (cur) consider(cur, true);
+  for (let i = state.idx + 1; i < sl.items.length; i++) if (!consider(sl.items[i], false)) break;
+  if (state.idx > 0) consider(sl.items[state.idx - 1], false);
+  return { keep, order };
+}
+
+async function preloadSetlist() {
+  const run = ++state.preloadRun;
+  const { keep, order } = planPreload();
   pruneCache(keep);
-  if (!nextItem) return;
-  const song = state.songs.get(nextItem.songId);
-  if (!song || (state.cache.get(song.id) && state.cache.get(song.id).size >= song.tracks.length)) return;
-  const token = state.loadToken;
-  setTimeout(async () => {
-    if (token !== state.loadToken) return;
-    try { await getBuffers(song); } catch (e) { console.warn('prefetch', e); }
-  }, 1500);
+  renderSongList();
+  for (const song of order) {
+    await new Promise((r) => setTimeout(r, 900));
+    if (run !== state.preloadRun) return;
+    try { await getBuffers(song); } catch (e) { console.warn('precarga', e); continue; }
+    if (run !== state.preloadRun) return;
+    renderSongList();
+  }
 }
 
 // ───────────────────────── setlists ─────────────────────────
@@ -292,6 +353,12 @@ function renderSongList() {
         <span class="s">${info.bpm} bpm</span></div>`;
     li.querySelector('.t').textContent = info.song.title;
     li.querySelector('.s').textContent = (info.song.artist ? info.song.artist + ' · ' : '') + U.fmtTime(info.song.duration).replace(/\.\d$/, '');
+    if (songLoaded(info.song)) {
+      const ok = document.createElement('span');
+      ok.className = 'rdy'; ok.textContent = '✓ lista'; ok.title = 'Ya está en memoria: suena sin esperas';
+      li.querySelector('.s').appendChild(ok);
+    }
+    wireDrag(li, i);
     const mv = document.createElement('div');
     mv.className = 'mv';
     for (const [lbl, act, title] of [['▲', 'up', 'Subir'], ['▼', 'down', 'Bajar'], ['✕', 'del', 'Quitar del setlist']]) {
@@ -305,6 +372,67 @@ function renderSongList() {
     ol.appendChild(li);
   });
   $('setlistTotal').textContent = `${sl.items.length} · ${U.fmtTime(total).replace(/\.\d$/, '')}`;
+  renderMem();
+}
+
+// Arrastrar canciones para cambiar el orden (bloqueado en modo en vivo)
+let dragFrom = -1;
+function clearDropMarks() { document.querySelectorAll('.song-item.drop-before, .song-item.drop-after, .song-item.dragging').forEach((e) => e.classList.remove('drop-before', 'drop-after', 'dragging')); }
+function wireDrag(li, i) {
+  if (state.settings.live) return;
+  li.draggable = true;
+  li.addEventListener('dragstart', (e) => {
+    dragFrom = i;
+    e.dataTransfer.setData('text/yren-item', String(i));
+    e.dataTransfer.effectAllowed = 'move';
+    li.classList.add('dragging');
+  });
+  li.addEventListener('dragover', (e) => {
+    if (dragFrom < 0 || ![...e.dataTransfer.types].includes('text/yren-item')) return;
+    e.preventDefault();
+    const r = li.getBoundingClientRect(), before = e.clientY < r.top + r.height / 2;
+    document.querySelectorAll('.song-item.drop-before, .song-item.drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
+    li.classList.add(before ? 'drop-before' : 'drop-after');
+  });
+  li.addEventListener('drop', (e) => {
+    if (dragFrom < 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = li.getBoundingClientRect(), before = e.clientY < r.top + r.height / 2;
+    let to = before ? i : i + 1;
+    const from = dragFrom;
+    if (from < to) to--;
+    dragFrom = -1; clearDropMarks();
+    reorderItem(from, to);
+  });
+  li.addEventListener('dragend', () => { dragFrom = -1; clearDropMarks(); });
+}
+
+async function reorderItem(from, to) {
+  const sl = currentSetlist();
+  if (!sl || from === to || from < 0 || to < 0 || from >= sl.items.length || to >= sl.items.length) return;
+  const curId = currentItem() ? currentItem().id : null;
+  const [it] = sl.items.splice(from, 1);
+  sl.items.splice(to, 0, it);
+  if (curId) state.idx = sl.items.findIndex((x) => x.id === curId);
+  await store.put('setlists', sl);
+  renderSongList();
+  preloadSetlist();
+}
+
+async function duplicateSetlist() {
+  const sl = currentSetlist();
+  if (!sl) return;
+  const name = await askText('Nombre de la copia', 'Copia de ' + sl.name, 'Duplicar');
+  if (!name) return;
+  engine.stop(); engine.unload(); state.loadedSongId = null;
+  const copy = { id: U.uid(), name, items: sl.items.map((x) => ({ ...x, id: U.uid() })), created: Date.now() };
+  state.setlists.push(copy);
+  state.slId = copy.id; state.idx = -1;
+  await store.put('setlists', copy);
+  await store.setSetting('currentSetlist', copy.id);
+  renderSetlistSelect(); renderSongList(); renderNow(); renderMixer(); renderSections(); updateKeyTempoUI(); dirtyWave = true;
+  toast(`Setlist “${name}” creado con ${copy.items.length} canciones`);
+  if (copy.items.length) await selectItem(0);
 }
 
 async function moveItem(i, act) {
@@ -325,33 +453,36 @@ async function moveItem(i, act) {
   }
   await store.put('setlists', sl);
   renderSongList(); renderNow(); renderMixer(); renderSections();
+  preloadSetlist();
 }
 
 // ───────────────────────── cargar / seleccionar ─────────────────────────
-async function selectItem(i) {
+async function selectItem(i, opts = {}) {
   const sl = currentSetlist();
   if (!sl || !sl.items[i]) return;
   const item = sl.items[i];
   const song = state.songs.get(item.songId);
   if (!song) { toast('Esa canción ya no está en la biblioteca', true); return; }
   const token = ++state.loadToken;
+  state.preloadRun++; // detiene una precarga en curso: esta carga tiene prioridad
   state.idx = i;
   renderSongList();
-  const cached = state.cache.get(song.id);
-  const needsDecode = !cached || cached.size < song.tracks.length;
-  if (needsDecode) showLoading(`Cargando “${song.title}”…`);
+  const needsDecode = !songLoaded(song);
+  if (needsDecode) showLoading(`Cargando “${song.title}”…`, 0);
   try {
     await engine.init();
-    const bufs = await getBuffers(song);
+    const bufs = await getBuffers(song, (d, t) => showLoading(`Cargando “${song.title}”… ${d}/${t} pistas`, d / t));
     if (token !== state.loadToken) return; // el usuario eligió otra
     song.tracks.forEach((t) => (t.solo = false));
-    engine.loadSong(song, bufs);
+    const cross = opts.cross > 0 && engine.playing ? opts.cross : 0;
+    if (cross) engine.detachGhost(cross); // la canción que suena se apaga sola mientras entra la nueva
+    engine.loadSong(song, bufs, { fadeIn: cross });
     engine.setTranspose(item.transpose || 0);
     engine.setTempo((item.tempo || 100) / 100);
     state.loadedSongId = song.id;
     showLoading(null);
     renderNow(); renderMixer(); renderSections(); updateKeyTempoUI(); syncPad(); dirtyWave = true;
-    prefetchNext();
+    preloadSetlist();
     return true;
   } catch (e) {
     console.error(e);
@@ -432,6 +563,7 @@ function padRootNow() {
   if (state.settings.padFollow && song && item) return U.shiftKey(song.key, item.transpose || 0).root;
   return state.settings.padRoot;
 }
+async function togglePad() { await engine.init(); state.padOn = !state.padOn; syncPad(); }
 function syncPad() {
   const s = state.settings;
   const root = padRootNow();
@@ -690,6 +822,16 @@ async function togglePlay() {
   } catch (e) { console.error(e); toast('No se pudo reproducir: ' + e.message, true); }
 }
 
+function doFade() {
+  if (!engine.playing) { toast('No hay nada sonando'); return; }
+  if (!engine.fadeOut(state.settings.fadeSec)) toast('Ya se está haciendo el fundido');
+}
+
+function applyTransitions() {
+  const s = state.settings;
+  engine.nearEndSec = s.autoNext && s.crossSec > 0 ? s.crossSec : 0;
+}
+
 function toggleLoop() {
   const song = currentSong();
   if (!song) return;
@@ -884,7 +1026,105 @@ function openLibrary() {
     row.appendChild(b);
     box.appendChild(row);
   }
+  updateBackupInfo();
   $('dlgLibrary').showModal();
+}
+
+// ───────────────────────── respaldo ─────────────────────────
+const DAY = 86400000;
+
+function backupAgeText() {
+  const last = state.settings.lastBackup;
+  if (!last) return 'Todavía no has hecho ningún respaldo en este Mac.';
+  const d = Math.floor((Date.now() - last) / DAY);
+  return d <= 0 ? 'Último respaldo: hoy.' : `Último respaldo: hace ${d} día${d === 1 ? '' : 's'}.`;
+}
+
+function updateBackupInfo() {
+  const el = $('backupInfo');
+  if (el) el.textContent = backupAgeText() + ' Guarda todo (canciones, setlists y audios) en un solo archivo para no perderlo si cambias de Mac o se borran los datos de la app.';
+}
+
+/** ¿Toca recordar el respaldo? Nunca en modo en vivo. Sin respaldo previo: a los 2 días de tener canciones; después, cada 14 días. */
+function backupDue() {
+  const s = state.settings;
+  if (s.live || !state.songs.size) return false;
+  const now = Date.now();
+  if (s.backupSnooze && now < s.backupSnooze) return false;
+  if (s.lastBackup) return now - s.lastBackup > 14 * DAY;
+  const oldest = Math.min(...[...state.songs.values()].map((x) => x.created || now));
+  return now - oldest > 2 * DAY;
+}
+
+function checkBackupReminder() {
+  const due = backupDue();
+  $('backupBanner').hidden = !due;
+  if (due) {
+    const s = state.settings;
+    $('backupBannerText').textContent = s.lastBackup
+      ? `Tu último respaldo fue hace ${Math.floor((Date.now() - s.lastBackup) / DAY)} días.`
+      : 'Todavía no tienes un respaldo de tus canciones.';
+  }
+  return due;
+}
+
+/** Espera a que Electron avise si la descarga se guardó o se canceló (en el navegador se da por buena). */
+function waitDownloadResult() {
+  if (!(window.yren && window.yren.onDownload)) return Promise.resolve({ state: 'completed' });
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve({ state: 'unknown' }), 15 * 60000);
+    window.yren.onDownload((r) => { clearTimeout(t); resolve(r); });
+  });
+}
+
+async function doBackup() {
+  showLoading('Preparando el respaldo…');
+  let built;
+  try { built = await Backup.buildPack(U.APP_VERSION); }
+  catch (e) { showLoading(null); toast('No se pudo preparar el respaldo: ' + e.message, true); return false; }
+  showLoading(null);
+  const waiting = waitDownloadResult();
+  Backup.downloadBlob(built.blob, Backup.packFileName());
+  const r = await waiting;
+  if (r.state === 'completed' || r.state === 'unknown') {
+    state.settings.lastBackup = Date.now(); state.settings.backupSnooze = 0;
+    saveSettingsSoon(); updateBackupInfo(); checkBackupReminder();
+    toast(`Respaldo guardado · ${built.counts.songs} canciones · ${(built.counts.bytes / 1048576).toFixed(0)} MB`);
+    return true;
+  }
+  toast('El respaldo no se guardó (se canceló). Inténtalo de nuevo.', true);
+  return false;
+}
+
+async function reloadAfterRestore() {
+  engine.stop(); engine.unload(); state.loadedSongId = null;
+  state.songs.clear(); state.cache.clear(); state.idx = -1; state.preloadRun++;
+  await loadAll();
+  renderSetlistSelect(); renderSongList(); renderNow(); renderMixer(); renderSections(); updateKeyTempoUI(); dirtyWave = true;
+  const sl = currentSetlist();
+  if (sl && sl.items.length) await selectItem(0);
+}
+
+async function restoreFromFile(file) {
+  let pack;
+  try { pack = await Backup.readPack(file); }
+  catch (e) { toast(e.message, true); return false; }
+  const h = pack.header;
+  const when = new Date(h.created || 0).toLocaleDateString('es-GT', { day: 'numeric', month: 'long', year: 'numeric' });
+  const ok = await askConfirm('Restaurar respaldo', `Respaldo del ${when}: ${h.songs.length} canciones, ${h.setlists.length} setlists. Lo que ya exista con el mismo nombre interno se reemplaza; lo demás se conserva.`, 'Restaurar');
+  if (!ok) return false;
+  const wasEmpty = !state.songs.size && !state.setlists.length;
+  try {
+    await importPack(pack);
+  } catch (e) { showLoading(null); toast('No se pudo restaurar: ' + e.message, true); return false; }
+  showLoading(null);
+  if (wasEmpty && h.settings) { const keep = { ...h.settings }; delete keep.lastBackup; delete keep.backupSnooze; Object.assign(state.settings, keep); saveSettingsSoon(); applyLive(); applyTransitions(); }
+  await reloadAfterRestore();
+  toast(`Respaldo restaurado: ${h.songs.length} canciones`);
+  return true;
+}
+async function importPack(pack) {
+  return Backup.importPack(pack, (n, t) => showLoading(`Restaurando audios ${n}/${t}…`, n / t));
 }
 
 // ───────────────────────── salida de audio perdida ─────────────────────────
@@ -967,6 +1207,7 @@ function populateSettings() {
   });
   if ([...sel.options].some((o) => o.value === state.settings.deviceId)) sel.value = state.settings.deviceId; else sel.value = 'default';
   $('modeSel').value = state.settings.mode;
+  $('fadeSel').value = String(state.settings.fadeSec); $('crossSel').value = String(state.settings.crossSec); $('memSel').value = String(state.settings.memBudgetMB);
   const info = engine.getInfo();
   const pairs = Math.max(1, Math.floor((info.channels || 2) / 2));
   for (const id of ['mainPair', 'monPair']) {
@@ -1036,7 +1277,8 @@ function wire() {
   $('btnLoop').addEventListener('click', toggleLoop);
   $('btnAddSection').addEventListener('click', addSectionHere);
   $('btnEdit').addEventListener('click', () => openEdit(false));
-  $('autoNext').addEventListener('change', (e) => { state.settings.autoNext = e.target.checked; saveSettingsSoon(); });
+  $('autoNext').addEventListener('change', (e) => { state.settings.autoNext = e.target.checked; applyTransitions(); saveSettingsSoon(); });
+  $('btnFade').addEventListener('click', doFade);
   document.querySelectorAll('#jumpMode button').forEach((b) => b.addEventListener('click', () => {
     state.settings.jumpMode = b.dataset.mode; saveSettingsSoon(); syncJumpMode();
   }));
@@ -1053,7 +1295,7 @@ function wire() {
   // pad
   const rootSel = $('padRoot');
   U.ROOT_OPTIONS.forEach((n, i) => { const o = document.createElement('option'); o.value = i; o.textContent = n; rootSel.appendChild(o); });
-  $('padToggle').addEventListener('click', async () => { await engine.init(); state.padOn = !state.padOn; syncPad(); });
+  $('padToggle').addEventListener('click', togglePad);
   $('padMon').addEventListener('change', (e) => { state.settings.padMon = e.target.checked; saveSettingsSoon(); syncPad(); });
   $('padFollow').addEventListener('change', (e) => { state.settings.padFollow = e.target.checked; saveSettingsSoon(); syncPad(); });
   $('padRoot').addEventListener('change', (e) => { state.settings.padRoot = +e.target.value; saveSettingsSoon(); syncPad(); });
@@ -1078,6 +1320,7 @@ function wire() {
     if (!name) return;
     sl.name = name; await store.put('setlists', sl); renderSetlistSelect();
   });
+  $('btnDupSetlist').addEventListener('click', duplicateSetlist);
   $('btnDelSetlist').addEventListener('click', async () => {
     const sl = currentSetlist(); if (!sl) return;
     if (!(await askConfirm('Eliminar setlist', `Se elimina “${sl.name}”. Las canciones siguen en la biblioteca.`, 'Eliminar'))) return;
@@ -1147,6 +1390,14 @@ function wire() {
   // ajustes de audio / biblioteca
   $('btnSettings').addEventListener('click', async () => { await engine.init().catch(() => {}); await refreshDevices(); populateSettings(); $('dlgSettings').showModal(); });
   $('btnLibrary').addEventListener('click', openLibrary);
+  $('btnBackup').addEventListener('click', doBackup);
+  $('btnRestore').addEventListener('click', () => { $('packInput').value = ''; $('packInput').click(); });
+  $('packInput').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) { $('dlgLibrary').close('cancel'); restoreFromFile(f); } });
+  $('backupNow').addEventListener('click', () => { $('backupBanner').hidden = true; doBackup(); });
+  $('backupLater').addEventListener('click', () => { state.settings.backupSnooze = Date.now() + 3 * DAY; saveSettingsSoon(); $('backupBanner').hidden = true; });
+  $('fadeSel').addEventListener('change', (e) => { state.settings.fadeSec = +e.target.value; saveSettingsSoon(); });
+  $('crossSel').addEventListener('change', (e) => { state.settings.crossSec = +e.target.value; applyTransitions(); saveSettingsSoon(); });
+  $('memSel').addEventListener('change', (e) => { state.settings.memBudgetMB = +e.target.value; saveSettingsSoon(); preloadSetlist(); });
   $('devSel').addEventListener('change', applyOutputSettings);
   $('modeSel').addEventListener('change', applyOutputSettings);
   $('mainPair').addEventListener('change', applyOutputSettings);
@@ -1174,6 +1425,14 @@ function wire() {
     else if (e.code === 'ArrowRight') { e.preventDefault(); stepSection(1); }
     else if (e.code === 'ArrowLeft') { e.preventDefault(); stepSection(-1); }
     else if (e.code === 'KeyL') toggleLoop();
+    else if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
+      e.preventDefault();
+      const it = currentItem(); if (!it) return;
+      const d = e.code === 'ArrowUp' ? 1 : -1;
+      if (e.shiftKey) setTempoPct((it.tempo || 100) + d); else setSemis((it.transpose || 0) + d);
+    }
+    else if (e.code === 'KeyP') togglePad();
+    else if (e.code === 'KeyF') doFade();
     else if (e.code === 'PageDown') stepSong(1);
     else if (e.code === 'PageUp') stepSong(-1);
   });
@@ -1204,8 +1463,21 @@ function wire() {
   $('alertRetry').addEventListener('click', retryOutput);
   $('alertDefault').addEventListener('click', useDefaultOutput);
   engine.addEventListener('output', () => { updateOutPill(); if ($('dlgSettings').open) populateSettings(); });
+  engine.addEventListener('fade', (e) => {
+    $('btnFade').classList.toggle('on', !!e.detail.on);
+    $('btnFade').textContent = e.detail.on ? '↘ Fundiendo…' : '↘ Fundido';
+    if (e.detail.done) toast('Fundido completo');
+  });
+  engine.addEventListener('nearend', async () => {
+    const cross = state.settings.crossSec, sl = currentSetlist();
+    if (!state.settings.autoNext || !(cross > 0) || state.crossing || !sl || state.idx + 1 >= sl.items.length) return;
+    state.crossing = true;
+    try { const ok = await selectItem(state.idx + 1, { cross }); if (ok) await playSafe(); }
+    finally { state.crossing = false; }
+  });
   engine.addEventListener('ended', async () => {
     updateTransportUI();
+    if (state.crossing) return;
     if (state.settings.autoNext) {
       const sl = currentSetlist();
       if (sl && state.idx + 1 < sl.items.length) { const ok = await selectItem(state.idx + 1); if (ok) await playSafe(); }
@@ -1221,7 +1493,9 @@ function applyLive() {
   const on = !!state.settings.live;
   document.body.classList.toggle('live', on);
   $('btnLive').classList.toggle('on', on);
+  if ($('backupBanner')) $('backupBanner').hidden = on || !backupDue();
   $('btnLive').textContent = on ? '🔒 EN VIVO' : '🔓 Edición';
+  renderSongList();
 }
 
 // ───────────────────────── arranque ─────────────────────────
@@ -1233,6 +1507,7 @@ async function boot() {
   requestPersistence();
   $('autoNext').checked = !!state.settings.autoNext;
   applyLive();
+  applyTransitions();
   syncJumpMode();
   renderSetlistSelect(); renderSongList(); renderNow(); renderMixer(); renderSections(); updateKeyTempoUI(); syncPad(); updateTransportUI();
 
@@ -1254,9 +1529,11 @@ async function boot() {
   // reabre el último setlist con su primera canción lista
   const sl = currentSetlist();
   if (sl && sl.items.length) await selectItem(0);
+  checkBackupReminder();
 }
 
 window.__yren.state = state;
+window.__yren.api = { selectItem, reorderItem, duplicateSetlist, doFade, doBackup, restoreFromFile, preloadSetlist, planPreload, cacheBytes, songLoaded, checkBackupReminder, backupDue, buildPack: () => Backup.buildPack(U.APP_VERSION) };
 window.__yren.outputLost = outputLost;
 window.__yren.outputRestored = outputRestored;
 window.__yren.playSafe = playSafe;

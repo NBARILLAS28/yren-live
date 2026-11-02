@@ -54,6 +54,7 @@ export class Engine extends EventTarget {
     this.outInfo = { channels: 2, mode: 'main-only', maxChannels: 2, warning: '' };
     this._timer = null;
     this._outNodes = [];
+    this.fading = null; this.songOut = null; this.ghosts = null; this.nearEndSec = 0; this._nearFired = false;
   }
 
   _emit(type, detail) { this.dispatchEvent(new CustomEvent(type, { detail })); }
@@ -174,36 +175,140 @@ export class Engine extends EventTarget {
   async decode(blob) {
     await this.init();
     const buf = await blob.arrayBuffer();
-    return this.ctx.decodeAudioData(buf);
+    return this.toMonoIfDual(await this.ctx.decodeAudioData(buf));
   }
+
+  /** Si los dos canales son idénticos (stem "estéreo" que en realidad es mono), guarda uno solo: mitad de memoria, mismo sonido. */
+  toMonoIfDual(buf) {
+    if (!buf || buf.numberOfChannels !== 2) return buf;
+    const a = buf.getChannelData(0), b = buf.getChannelData(1);
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return buf;
+    const mono = this.ctx.createBuffer(1, buf.length, buf.sampleRate);
+    mono.getChannelData(0).set(a);
+    return mono;
+  }
+
+  /** Memoria aproximada (bytes) que ocupa un AudioBuffer. */
+  static bufferBytes(buf) { return buf ? buf.length * buf.numberOfChannels * 4 : 0; }
 
   // ───────────────────────── canción y pistas ─────────────────────────
 
-  /** song: {id, duration, sections:[{id,name,start}], tracks:[{id,name,kind,route,transpose,vol,mute,solo}]}; buffers: Map(trackId→AudioBuffer) */
-  loadSong(song, buffers) {
+  /** song: {id, duration, sections:[{id,name,start}], tracks:[{id,name,kind,route,transpose,vol,mute,solo}]}; buffers: Map(trackId→AudioBuffer)
+   *  opts.fadeIn: segundos de entrada (transición suave entre canciones). */
+  loadSong(song, buffers, opts = {}) {
     this.unload();
     const ctx = this.ctx;
     this.song = song;
-    this.rate = 1; this.semis = 0; this.loop = null; this.pending = null;
+    this.rate = 1; this.semis = 0; this.loop = null; this.pending = null; this._nearFired = false;
+    // Ganancia por canción: permite fundido de salida y transición suave sin tocar los faders de las pistas
+    const outMain = ctx.createGain(), outMon = ctx.createGain();
+    outMain.connect(this.mainBus); outMon.connect(this.monitorBus);
+    this.songOut = { main: outMain, mon: outMon };
     this.tracks = song.tracks.map((meta) => {
       const gain = ctx.createGain(), toMain = ctx.createGain(), toMon = ctx.createGain();
       const an = this._analyser();
       gain.connect(toMain); gain.connect(toMon); gain.connect(an);
-      toMain.connect(this.mainBus); toMon.connect(this.monitorBus);
+      toMain.connect(outMain); toMon.connect(outMon);
       return { meta, buffer: buffers.get(meta.id) || null, gain, toMain, toMon, an };
     });
     this.refreshMix(true);
+    if (opts.fadeIn > 0) this._rampSong(this.songOut, 0, 1, opts.fadeIn);
     this.pausedPos = 0; this.playing = false;
     this._emit('state');
   }
 
+  /** Curva de potencia constante entre dos niveles (0↔1) para que la suma de dos canciones no cambie de volumen. */
+  _rampSong(out, from, to, sec) {
+    const now = this.ctx.currentTime, N = 48, curve = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const x = i / (N - 1);
+      curve[i] = from + (to - from) * (to > from ? Math.sin(x * Math.PI / 2) : 1 - Math.cos(x * Math.PI / 2));
+    }
+    for (const g of [out.main.gain, out.mon.gain]) {
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(from, now);
+      g.setValueCurveAtTime(curve, now, Math.max(0.05, sec));
+    }
+  }
+
+  _resetSongOut() {
+    if (!this.songOut || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    for (const g of [this.songOut.main.gain, this.songOut.mon.gain]) { g.cancelScheduledValues(now); g.setValueAtTime(1, now); }
+  }
+
+  // ───────────────────────── fundido y transición ─────────────────────────
+
+  /** Baja el volumen de la canción en `sec` segundos y la detiene (vuelve al inicio). */
+  fadeOut(sec = 4) {
+    if (!this.playing || !this.songOut || this.fading) return false;
+    sec = clamp(sec, 0.5, 20);
+    const out = this.songOut, now = this.ctx.currentTime;
+    const cur = out.main.gain.value;
+    for (const g of [out.main.gain, out.mon.gain]) {
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(cur, now);
+      g.linearRampToValueAtTime(0, now + sec);
+    }
+    const id = (this._fadeId = (this._fadeId || 0) + 1);
+    this.fading = { id, until: now + sec };
+    this._fadeTimer = setTimeout(() => {
+      if (!this.fading || this.fading.id !== id) return;
+      this.fading = null;
+      this.stop();
+      this._resetSongOut();
+      this._emit('fade', { on: false, done: true });
+    }, sec * 1000 + 80);
+    this._emit('fade', { on: true, sec });
+    return true;
+  }
+
+  _cancelFade() {
+    if (!this.fading) return;
+    clearTimeout(this._fadeTimer);
+    this.fading = null;
+    this._resetSongOut();
+    this._emit('fade', { on: false, done: false });
+  }
+
+  /** Separa la canción que suena para que se apague sola en `sec` segundos, y deja el motor libre para cargar la siguiente. */
+  detachGhost(sec) {
+    if (!this.ctx || !this.song || !this.playing) return false;
+    const ctx = this.ctx;
+    this._cancelFade();
+    this._cancelPendingHard();
+    const ghost = { voice: this.voice, tracks: this.tracks, out: this.songOut };
+    this.voice = null; this.tracks = []; this.songOut = null; this.song = null; this.playing = false; this.loop = null;
+    const now = ctx.currentTime;
+    const cur = ghost.out.main.gain.value;
+    const N = 48, curve = new Float32Array(N);
+    for (let i = 0; i < N; i++) curve[i] = cur * Math.cos((i / (N - 1)) * Math.PI / 2);
+    for (const g of [ghost.out.main.gain, ghost.out.mon.gain]) {
+      g.cancelScheduledValues(now); g.setValueAtTime(cur, now); g.setValueCurveAtTime(curve, now, Math.max(0.05, sec));
+    }
+    (this.ghosts || (this.ghosts = new Set())).add(ghost);
+    setTimeout(() => {
+      if (ghost.voice) this._killVoice(ghost.voice, 0, 0.02);
+      setTimeout(() => {
+        for (const t of ghost.tracks) for (const n of [t.gain, t.toMain, t.toMon, t.an]) { try { n.disconnect(); } catch { /* noop */ } }
+        for (const g of [ghost.out.main, ghost.out.mon]) { try { g.disconnect(); } catch { /* noop */ } }
+        this.ghosts.delete(ghost);
+      }, 700);
+    }, sec * 1000 + 120);
+    this._emit('state');
+    return true;
+  }
+
   unload() {
     if (!this.ctx) return;
+    this._cancelFade();
     this._cancelPendingHard();
     if (this.voice) { this._killVoice(this.voice, this.ctx.currentTime, 0.01); this.voice = null; }
     for (const t of this.tracks) {
       for (const n of [t.gain, t.toMain, t.toMon, t.an]) { try { n.disconnect(); } catch { /* noop */ } }
     }
+    if (this.songOut) for (const g of [this.songOut.main, this.songOut.mon]) { try { g.disconnect(); } catch { /* noop */ } }
+    this.songOut = null;
     this.tracks = []; this.song = null; this.playing = false; this.loop = null;
   }
 
@@ -350,6 +455,7 @@ export class Engine extends EventTarget {
     await this.init();
     if (!this.song || this.playing) return;
     const ctx = this.ctx;
+    this._cancelFade();
     if (ctx.state !== 'running') { try { await ctx.resume(); } catch { /* noop */ } }
     let pos = this.pausedPos;
     if (pos >= this.song.duration - 0.05) pos = 0;
@@ -364,6 +470,7 @@ export class Engine extends EventTarget {
 
   pause() {
     if (!this.playing) return;
+    if (this.fading) { clearTimeout(this._fadeTimer); this.fading = null; this._resetSongOut(); this._emit('fade', { on: false, done: false }); }
     const pos = this.getPosition();
     this._cancelPendingHard();
     if (this.voice) this._killVoice(this.voice);
@@ -383,6 +490,7 @@ export class Engine extends EventTarget {
   seek(pos) {
     if (!this.song) return;
     pos = clamp(pos, 0, this.song.duration);
+    if (pos < this.song.duration - (this.nearEndSec || 0) - 0.5) this._nearFired = false;
     if (this.loop && (pos < this.loop.start || pos >= this.loop.end)) this.clearLoop();
     if (!this.playing) { this.pausedPos = pos; this._emit('state'); return; }
     this._cancelPendingHard();
@@ -555,6 +663,10 @@ export class Engine extends EventTarget {
     this._commitPendingIfDue();
     if (this.playing && !this.pending) {
       const pos = this._posAt(this.ctx.currentTime);
+      if (this.nearEndSec > 0 && !this._nearFired && !this.loop && pos >= this.song.duration - this.nearEndSec) {
+        this._nearFired = true;
+        this._emit('nearend', { remaining: this.song.duration - pos });
+      }
       if (pos >= this.song.duration - 0.01) {
         this.pause();
         this.pausedPos = 0;

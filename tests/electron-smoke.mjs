@@ -14,7 +14,8 @@ const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'yren-electron-'));
 const args = [`--user-data-dir=${userData}`, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${PORT}`, '--autoplay-policy=no-user-gesture-required', root];
 const cmd = process.env.DISPLAY ? electronPath : 'xvfb-run';
 const argv = process.env.DISPLAY ? args : ['-a', electronPath, ...args];
-const child = spawn(cmd, argv, { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, YREN_TEST: '1', YREN_TEST_ANSWER: 'stay' } });
+const dlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yren-dl-'));
+const child = spawn(cmd, argv, { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, YREN_TEST: '1', YREN_TEST_ANSWER: 'stay', YREN_TEST_DOWNLOAD_DIR: dlDir } });
 let logs = ''; child.stdout.on('data', (d) => (logs += d)); child.stderr.on('data', (d) => (logs += d));
 
 const R = { checks: [], failed: 0 };
@@ -50,6 +51,11 @@ try {
   });
   check('Reproduce con cambio de tonalidad en Electron', play.pos > 0.8 && play.pos < 1.6, 'pos=' + play.pos.toFixed(2));
   check('Sin errores de JavaScript en la ventana', errors.length === 0, errors.slice(0, 3).join(' | '));
+  // respaldo: la descarga se guarda y Electron avisa a la interfaz
+  const bk = await page.evaluate(async () => { const ok = await window.__yren.api.doBackup(); return { ok, last: window.__yren.state.settings.lastBackup }; });
+  const saved = fs.readdirSync(dlDir).filter((f) => f.endsWith('.yrenpack'));
+  const head = saved[0] ? fs.readFileSync(path.join(dlDir, saved[0])).subarray(0, 8).toString() : '';
+  check('Respaldo: se guarda el archivo .yrenpack y la app lo registra', bk.ok === true && saved.length === 1 && head === 'YRENPK1\n' && Date.now() - bk.last < 30000, saved.join(',') + ' · ' + JSON.stringify(head));
   // cierre con música sonando: debe preguntar
   const notPlaying = await page.evaluate(async () => { window.yren.setPlaying(false); await new Promise((r) => setTimeout(r, 200)); return true; });
   await page.evaluate(() => window.yren.setPlaying(true)); await sleep(300);

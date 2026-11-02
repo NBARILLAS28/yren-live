@@ -312,3 +312,19 @@ body.live .add-row, body.live #btnAddSection, body.live .song-item .mv, body.liv
 body.live .sec-chip { padding: 9px 18px; font-size: 16px; }
 body.live .song-item { padding: 12px 10px; }
 body.live #btnLive { background: linear-gradient(180deg, #ff5c7a, #c93658); border-color: #ff8aa0; color: #fff; box-shadow: 0 0 16px rgba(255, 92, 122, 0.4); }
+
+/* ───── v0.3: progreso, memoria, respaldo, reordenar, fundido ───── */
+.loading .bar { width: min(360px, 70vw); height: 6px; border-radius: 4px; background: var(--line2); overflow: hidden; }
+.loading .bar[hidden] { display: none; }
+.loading .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--blue), var(--cyan)); transition: width 0.15s; }
+.mem { color: var(--muted); font-size: 11px; text-align: center; margin: 6px 0 0; font-variant-numeric: tabular-nums; }
+.mem.high { color: var(--warn); }
+.song-item .rdy { color: var(--ok, #3ee08f); font-size: 11px; margin-left: 4px; }
+.song-item.dragging { opacity: 0.4; }
+.song-item.drop-before { box-shadow: 0 -3px 0 0 var(--cyan); }
+.song-item.drop-after { box-shadow: 0 3px 0 0 var(--cyan); }
+.song-item[draggable="true"] { cursor: grab; }
+#btnFade.on { background: rgba(255, 181, 71, 0.18); border-color: var(--warn); color: var(--warn); }
+.backup-banner { position: fixed; left: 14px; bottom: 14px; z-index: 55; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #0f2347; border: 1px solid var(--warn); color: var(--silver); padding: 10px 14px; border-radius: 12px; max-width: min(520px, 90vw); box-shadow: 0 0 18px rgba(255, 181, 71, 0.25); font-size: 13px; }
+.backup-banner[hidden] { display: none; }
+body.live .backup-banner { display: none !important; }

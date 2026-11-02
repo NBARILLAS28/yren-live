@@ -102,6 +102,14 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media'));
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media');
 
+  // Descargas (respaldo): se avisa a la interfaz si se guardó o se canceló, para no dar por hecho un respaldo que no existe.
+  session.defaultSession.on('will-download', (_e, item) => {
+    if (process.env.YREN_TEST_DOWNLOAD_DIR) item.setSavePath(path.join(process.env.YREN_TEST_DOWNLOAD_DIR, item.getFilename()));
+    item.once('done', (_e2, st) => {
+      if (win && !win.isDestroyed()) win.webContents.send('yren:download', { state: st, path: item.getSavePath() });
+    });
+  });
+
   ipcMain.on('yren:playing', (_e, v) => { isPlaying = !!v; });
   if (process.env.YREN_TEST) { // ganchos solo para pruebas automáticas
     ipcMain.handle('yren:test-answer', (_e, a) => { process.env.YREN_TEST_ANSWER = a; return true; });

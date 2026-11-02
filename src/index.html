@@ -22,6 +22,7 @@
       <select id="setlistSel" aria-label="Setlist"></select>
       <button class="btn ghost sm" id="btnNewSetlist" title="Nuevo setlist">+ Nuevo</button>
       <button class="btn ghost sm" id="btnRenameSetlist">Renombrar</button>
+      <button class="btn ghost sm" id="btnDupSetlist" title="Copia este setlist para armar el del próximo servicio">Duplicar</button>
       <button class="btn ghost sm danger" id="btnDelSetlist">Eliminar</button>
     </div>
 
@@ -46,7 +47,8 @@
         <button class="btn ghost" id="btnAddFolder" title="Una carpeta = una canción">+ Carpeta</button>
       </div>
       <label class="check auto-next"><input type="checkbox" id="autoNext"> Pasar a la siguiente canción al terminar</label>
-      <p class="hint">También puedes arrastrar los archivos de audio aquí.</p>
+      <p class="hint">También puedes arrastrar los archivos de audio aquí, y arrastrar las canciones para cambiar el orden.</p>
+      <p class="mem" id="memInfo" title="Memoria que usan los stems ya cargados para sonar sin esperas"></p>
       <input type="file" id="fileInput" accept="audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg,.aif,.aiff" multiple hidden>
       <input type="file" id="folderInput" webkitdirectory hidden>
     </aside>
@@ -77,6 +79,7 @@
           <button class="btn ghost" id="btnPrevSec" title="Sección anterior">‹ Sección</button>
           <button class="btn ghost" id="btnNextSec" title="Sección siguiente">Sección ›</button>
           <button class="btn toggle" id="btnLoop" title="Repetir la sección actual">⟳ Bucle</button>
+          <button class="btn ghost" id="btnFade" title="Fundido de salida y detener (F)">↘ Fundido</button>
           <div class="seg" id="jumpMode" role="group" aria-label="Modo de salto">
             <button data-mode="end" class="on" title="El salto ocurre al terminar la sección actual">Al terminar</button>
             <button data-mode="now" title="El salto ocurre de inmediato">Ya</button>
@@ -164,7 +167,13 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <div class="loading" id="loading" hidden><div class="spinner"></div><div id="loadingText">Cargando…</div></div>
+  <div class="loading" id="loading" hidden><div class="spinner"></div><div id="loadingText">Cargando…</div><div class="bar" id="loadingBarWrap" hidden><i id="loadingBar"></i></div></div>
+  <div class="backup-banner" id="backupBanner" hidden role="status">
+    <span id="backupBannerText">Hace tiempo que no haces un respaldo.</span>
+    <button class="btn sm" id="backupNow">Respaldar ahora</button>
+    <button class="btn ghost sm" id="backupLater">Más tarde</button>
+  </div>
+  <input type="file" id="packInput" accept=".yrenpack" hidden>
   <div class="dropzone" id="dropzone" hidden>Suelta los archivos de audio para crear una canción</div>
 
   <!-- ───────── Diálogos ───────── -->
@@ -198,6 +207,18 @@
         <button type="button" class="btn ghost sm" id="btnTestMain" title="Tono grave por la izquierda y agudo por la derecha, solo en la mezcla Principal">🔊 Probar Principal</button>
         <button type="button" class="btn ghost sm" id="btnTestMon" title="Tono grave por la izquierda y agudo por la derecha, solo en la mezcla Monitor">🔊 Probar Monitor</button>
         <span class="muted small" id="testInfo">Suena un tono grave por la izquierda y uno agudo por la derecha.</span>
+      </div>
+      <h4>Transiciones y memoria</h4>
+      <div class="grid3">
+        <label class="field">Duración del fundido
+          <select id="fadeSel"><option value="2">2 s</option><option value="4">4 s</option><option value="6">6 s</option><option value="8">8 s</option><option value="12">12 s</option></select>
+        </label>
+        <label class="field" title="Con «Pasar a la siguiente canción» activado, la siguiente empieza antes de que termine la actual">Transición entre canciones
+          <select id="crossSel"><option value="0">Sin transición</option><option value="3">Suave 3 s</option><option value="5">Suave 5 s</option><option value="8">Suave 8 s</option></select>
+        </label>
+        <label class="field" title="Memoria máxima para tener canciones del setlist ya cargadas">Memoria para precargar
+          <select id="memSel"><option value="600">600 MB</option><option value="1000">1 GB</option><option value="1500">1.5 GB</option><option value="2500">2.5 GB</option><option value="4000">4 GB</option></select>
+        </label>
       </div>
       <div class="dlg-actions">
         <button class="btn ghost" value="close">Cerrar</button>
@@ -242,9 +263,15 @@
 
   <dialog id="dlgLibrary" class="dlg">
     <form method="dialog" class="dlg-body">
-      <h3>Biblioteca</h3>
+      <h3>Biblioteca y respaldo</h3>
       <p class="muted small">Todas las canciones guardadas en este Mac. Agrégalas al setlist actual.</p>
       <div id="libList" class="lib-list"></div>
+      <h4>Respaldo</h4>
+      <p class="muted small" id="backupInfo">Guarda todo (canciones, setlists y audios) en un solo archivo para no perderlo si cambias de Mac o se borran los datos de la app.</p>
+      <div class="row-btns">
+        <button type="button" class="btn sm" id="btnBackup">Guardar respaldo…</button>
+        <button type="button" class="btn ghost sm" id="btnRestore">Restaurar respaldo…</button>
+      </div>
       <div class="dlg-actions"><button class="btn ghost" value="close">Cerrar</button></div>
     </form>
   </dialog>

@@ -21,6 +21,12 @@ jobs:
         run: npm run test:engine
       - name: Interfaz completa (Chrome headless)
         run: npm run test:ui
+      - name: Diseño en distintos tamaños de pantalla
+        run: npm run test:layout
+      - name: Seguridad en vivo (v0.2)
+        run: npm run test:v02
+      - name: Servicio completo (v0.3)
+        run: npm run test:v03
       - name: Aplicación Electron real (xvfb)
         continue-on-error: true
         run: |

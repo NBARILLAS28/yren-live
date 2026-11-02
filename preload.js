@@ -8,6 +8,7 @@ const testHooks = process.env.YREN_TEST ? {
 contextBridge.exposeInMainWorld('yren', {
   ...testHooks,
   askMic: () => ipcRenderer.invoke('yren:ask-mic'),
+  onDownload: (cb) => ipcRenderer.once('yren:download', (_e, r) => cb(r)),
   setPlaying: (v) => ipcRenderer.send('yren:playing', !!v),
   platform: process.platform,
 });
