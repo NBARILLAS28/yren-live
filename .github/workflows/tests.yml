@@ -1,0 +1,29 @@
+name: Pruebas
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Motor de audio (Chrome headless)
+        run: npm run test:engine
+      - name: Interfaz completa (Chrome headless)
+        run: npm run test:ui
+      - name: Aplicación Electron real (xvfb)
+        continue-on-error: true
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y xvfb libgbm1 libnss3 libgtk-3-0 || true
+          npm run test:electron

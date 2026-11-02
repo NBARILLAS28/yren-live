@@ -5,7 +5,7 @@ import * as U from './util.js';
 
 const $ = (id) => document.getElementById(id);
 const engine = new Engine();
-window.__yren = { engine }; // útil para depurar y para las pruebas automáticas
+window.__yren = { engine }; // útil para depurar y para las pruebas automáticas (se completa más abajo)
 
 // ───────────────────────── estado ─────────────────────────
 const state = {
@@ -21,8 +21,9 @@ const state = {
   settings: {
     deviceId: 'default', mode: 'pairs', mainPair: 0, monitorPair: 1,
     jumpMode: 'end', autoNext: false, padMon: true, padFollow: true, padVol: 55, padRoot: 0,
-    mainVol: 100, monVol: 100,
+    mainVol: 100, monVol: 100, live: false, deviceLabel: '',
   },
+  outLost: false,
 };
 
 const currentSetlist = () => state.setlists.find((s) => s.id === state.slId) || null;
@@ -675,6 +676,7 @@ function frame(ts) {
 // ───────────────────────── transporte ─────────────────────────
 function updateTransportUI() {
   const playing = engine.playing;
+  if (window.yren && window.yren.setPlaying) window.yren.setPlaying(playing);
   $('btnPlay').textContent = playing ? '⏸' : '▶';
   $('btnPlay').classList.toggle('playing', playing);
   $('btnLoop').classList.toggle('on', !!engine.loop);
@@ -684,7 +686,7 @@ function updateTransportUI() {
 async function togglePlay() {
   if (!currentSong()) { toast('Primero agrega o elige una canción'); return; }
   try {
-    if (engine.playing) engine.pause(); else await engine.play();
+    if (engine.playing) engine.pause(); else await playSafe();
   } catch (e) { console.error(e); toast('No se pudo reproducir: ' + e.message, true); }
 }
 
@@ -885,6 +887,63 @@ function openLibrary() {
   $('dlgLibrary').showModal();
 }
 
+// ───────────────────────── salida de audio perdida ─────────────────────────
+function showOutAlert(title, text) {
+  $('alertTitle').textContent = title; $('alertText').textContent = text;
+  $('outAlert').hidden = false;
+}
+function hideOutAlert() { $('outAlert').hidden = true; }
+
+/** La interfaz elegida desapareció: pausa YA y bloquea la reproducción para que no suene por las bocinas del Mac. */
+function outputLost() {
+  if (state.outLost) return;
+  state.outLost = true;
+  if (engine.playing) engine.pause();
+  const name = state.settings.deviceLabel || 'la interfaz de audio';
+  showOutAlert('INTERFAZ DESCONECTADA', `No encuentro ${name}. Pausé la música para que no salga por las bocinas del Mac. Reconecta el cable o la interfaz y pulsa «Ya la reconecté», o elige usar la salida del Mac.`);
+  updateOutPill();
+}
+
+async function outputRestored() {
+  if (!state.outLost) return;
+  const s = state.settings;
+  state.outLost = false; hideOutAlert();
+  try { await engine.setOutput({ deviceId: s.deviceId, mode: s.mode, mainPair: s.mainPair, monitorPair: s.monitorPair }); } catch { /* se avisa desde el motor */ }
+  updateOutPill();
+  toast('Interfaz reconectada. Pulsa reproducir cuando estés listo.');
+}
+
+function deviceMissing() {
+  const id = state.settings.deviceId;
+  if (id === 'default') return false;
+  // Si el sistema no está entregando la lista de salidas, no se puede afirmar que falte: se confía en los avisos del motor.
+  const listed = state.devices.filter((d) => d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications');
+  if (!listed.length) return false;
+  return !state.devices.some((d) => d.deviceId === id);
+}
+
+async function retryOutput() {
+  await refreshDevices();
+  if (!deviceMissing()) await outputRestored();
+  else toast('Todavía no veo la interfaz. Revisa el cable y que esté encendida.', true);
+}
+
+async function useDefaultOutput() {
+  const s = state.settings;
+  s.deviceId = 'default'; s.deviceLabel = ''; saveSettingsSoon();
+  state.outLost = false; hideOutAlert();
+  await engine.setOutput({ deviceId: 'default', mode: s.mode, mainPair: s.mainPair, monitorPair: s.monitorPair });
+  updateOutPill();
+  toast('Usando la salida del Mac. El click y la guía no se oirán en ese modo.', true);
+}
+
+/** Todo lo que arranca reproducción pasa por aquí para respetar el bloqueo de salida. */
+async function playSafe() {
+  if (state.outLost) { showOutAlert('SALIDA DE AUDIO NO DISPONIBLE', 'La interfaz elegida no está conectada. Reconéctala o elige la salida del Mac para poder reproducir.'); return false; }
+  await engine.play();
+  return true;
+}
+
 // ───────────────────────── ajustes de audio ─────────────────────────
 async function refreshDevices() {
   try {
@@ -926,6 +985,7 @@ async function applyOutputSettings() {
   const s = state.settings;
   const deviceChanged = s.deviceId !== $('devSel').value;
   s.deviceId = $('devSel').value;
+  s.deviceLabel = s.deviceId === 'default' ? '' : (state.devices.find((d) => d.deviceId === s.deviceId) || {}).label || s.deviceLabel || '';
   s.mode = $('modeSel').value;
   s.mainPair = +$('mainPair').value; s.monitorPair = +$('monPair').value;
   if (deviceChanged) { s.mainPair = 0; s.monitorPair = 1; } // propuesta típica: sala 1-2, monitor 3-4
@@ -1044,6 +1104,7 @@ function wire() {
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', async (e) => {
     e.preventDefault(); dragDepth = 0; $('dropzone').hidden = true;
+    if (state.settings.live) { toast('Modo en vivo: desactívalo para importar canciones', true); return; }
     const files = await collectDropped(e.dataTransfer);
     if (files.length) importFiles(files);
   });
@@ -1091,6 +1152,17 @@ function wire() {
   $('mainPair').addEventListener('change', applyOutputSettings);
   $('monPair').addEventListener('change', applyOutputSettings);
   $('btnDetectDev').addEventListener('click', detectDeviceNames);
+  for (const [id, which] of [['btnTestMain', 'main'], ['btnTestMon', 'monitor']]) {
+    $(id).addEventListener('click', async () => {
+      if (state.outLost) { toast('La interfaz no está conectada.', true); return; }
+      $('btnTestMain').disabled = $('btnTestMon').disabled = true;
+      $('testInfo').textContent = which === 'main' ? 'Sonando en PRINCIPAL: primero izquierda (grave), luego derecha (agudo)…' : 'Sonando en MONITOR: primero izquierda (grave), luego derecha (agudo)…';
+      try { await engine.testTone(which); } finally { $('btnTestMain').disabled = $('btnTestMon').disabled = false; $('testInfo').textContent = 'Suena un tono grave por la izquierda y uno agudo por la derecha.'; }
+    });
+  }
+
+  // modo en vivo
+  $('btnLive').addEventListener('click', () => { state.settings.live = !state.settings.live; applyLive(); saveSettingsSoon(); toast(state.settings.live ? 'Modo en vivo: edición bloqueada' : 'Modo en vivo apagado'); });
 
   // atajos de teclado
   window.addEventListener('keydown', (e) => {
@@ -1110,12 +1182,9 @@ function wire() {
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
     navigator.mediaDevices.addEventListener('devicechange', async () => {
       await refreshDevices();
-      const id = state.settings.deviceId;
-      if (id !== 'default' && !state.devices.some((d) => d.deviceId === id)) {
-        toast('La interfaz de audio se desconectó. Se volvió a la salida predeterminada.', true);
-        state.settings.deviceId = 'default'; saveSettingsSoon();
-        await engine.setOutput({ deviceId: 'default' }); updateOutPill();
-      }
+      if (deviceMissing()) outputLost();
+      else if (state.outLost) await outputRestored();
+      if ($('dlgSettings').open) populateSettings();
     });
   }
 
@@ -1125,18 +1194,34 @@ function wire() {
   engine.addEventListener('pending', () => { updateSectionChips(true); dirtyWave = true; });
   engine.addEventListener('jumped', () => updateSectionChips(true));
   engine.addEventListener('warn', (e) => toast(e.detail, true));
+  engine.addEventListener('sinkerror', () => outputLost());
+  engine.addEventListener('sinkchange', () => {
+    // la salida cambió sola: si pedimos una interfaz concreta y ya no es esa, se perdió
+    const want = state.settings.deviceId, sid = engine.ctx && engine.ctx.sinkId;
+    const cur = typeof sid === 'string' ? sid : '';
+    if (want !== 'default' && cur !== want) outputLost();
+  });
+  $('alertRetry').addEventListener('click', retryOutput);
+  $('alertDefault').addEventListener('click', useDefaultOutput);
   engine.addEventListener('output', () => { updateOutPill(); if ($('dlgSettings').open) populateSettings(); });
   engine.addEventListener('ended', async () => {
     updateTransportUI();
     if (state.settings.autoNext) {
       const sl = currentSetlist();
-      if (sl && state.idx + 1 < sl.items.length) { const ok = await selectItem(state.idx + 1); if (ok) engine.play(); }
+      if (sl && state.idx + 1 < sl.items.length) { const ok = await selectItem(state.idx + 1); if (ok) await playSafe(); }
     }
   });
 }
 
 function syncJumpMode() {
   document.querySelectorAll('#jumpMode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === state.settings.jumpMode));
+}
+
+function applyLive() {
+  const on = !!state.settings.live;
+  document.body.classList.toggle('live', on);
+  $('btnLive').classList.toggle('on', on);
+  $('btnLive').textContent = on ? '🔒 EN VIVO' : '🔓 Edición';
 }
 
 // ───────────────────────── arranque ─────────────────────────
@@ -1147,6 +1232,7 @@ async function boot() {
   try { await loadAll(); } catch (e) { console.error(e); toast('No se pudo leer la biblioteca guardada', true); }
   requestPersistence();
   $('autoNext').checked = !!state.settings.autoNext;
+  applyLive();
   syncJumpMode();
   renderSetlistSelect(); renderSongList(); renderNow(); renderMixer(); renderSections(); updateKeyTempoUI(); syncPad(); updateTransportUI();
 
@@ -1155,13 +1241,10 @@ async function boot() {
   try {
     await engine.init();
     const s = state.settings;
-    if (s.deviceId !== 'default' && !state.devices.some((d) => d.deviceId === s.deviceId)) {
-      s.deviceId = 'default';
-      toast('No encuentro la interfaz de audio guardada; uso la salida predeterminada.', true);
-    }
     engine.levels.main = s.mainVol / 100; engine.levels.monitor = s.monVol / 100;
     engine.mainBus.gain.value = s.mainVol / 100; engine.monitorBus.gain.value = s.monVol / 100;
-    await engine.setOutput({ deviceId: s.deviceId, mode: s.mode, mainPair: s.mainPair, monitorPair: s.monitorPair });
+    if (deviceMissing()) outputLost();
+    else await engine.setOutput({ deviceId: s.deviceId, mode: s.mode, mainPair: s.mainPair, monitorPair: s.monitorPair });
     engine.setLevel('pad', s.padVol / 100);
   } catch (e) {
     console.error(e);
@@ -1173,4 +1256,8 @@ async function boot() {
   if (sl && sl.items.length) await selectItem(0);
 }
 
+window.__yren.state = state;
+window.__yren.outputLost = outputLost;
+window.__yren.outputRestored = outputRestored;
+window.__yren.playSafe = playSafe;
 boot();

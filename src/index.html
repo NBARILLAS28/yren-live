@@ -27,6 +27,7 @@
 
     <div class="top-right">
       <span class="status-pill" id="outPill" title="Salida de audio actual">Audio…</span>
+      <button class="btn toggle" id="btnLive" title="Modo en vivo: bloquea la edición (borrar, renombrar, importar) para evitar errores durante el servicio">🔒 En vivo</button>
       <button class="btn ghost" id="btnLibrary">Biblioteca</button>
       <button class="btn" id="btnSettings">⚙ Audio</button>
     </div>
@@ -150,6 +151,18 @@
     </section>
   </main>
 
+  <div class="alert-overlay" id="outAlert" hidden role="alertdialog" aria-live="assertive" aria-labelledby="alertTitle">
+    <div class="alert-card">
+      <div class="alert-icon">⚠</div>
+      <h2 id="alertTitle">INTERFAZ DESCONECTADA</h2>
+      <p id="alertText"></p>
+      <div class="alert-actions">
+        <button class="btn" id="alertRetry">Ya la reconecté</button>
+        <button class="btn ghost" id="alertDefault">Usar la salida del Mac</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="loading" id="loading" hidden><div class="spinner"></div><div id="loadingText">Cargando…</div></div>
   <div class="dropzone" id="dropzone" hidden>Suelta los archivos de audio para crear una canción</div>
@@ -181,6 +194,11 @@
         </label>
       </div>
       <p class="warn" id="outWarn" hidden></p>
+      <div class="row-btns">
+        <button type="button" class="btn ghost sm" id="btnTestMain" title="Tono grave por la izquierda y agudo por la derecha, solo en la mezcla Principal">🔊 Probar Principal</button>
+        <button type="button" class="btn ghost sm" id="btnTestMon" title="Tono grave por la izquierda y agudo por la derecha, solo en la mezcla Monitor">🔊 Probar Monitor</button>
+        <span class="muted small" id="testInfo">Suena un tono grave por la izquierda y uno agudo por la derecha.</span>
+      </div>
       <div class="dlg-actions">
         <button class="btn ghost" value="close">Cerrar</button>
       </div>

@@ -17,7 +17,7 @@ jobs:
           node-version: 22
 
       - name: Instalar dependencias
-        run: npm install
+        run: npm ci
 
       - name: Construir .dmg (Intel + Apple Silicon)
         run: npm run dist:universal

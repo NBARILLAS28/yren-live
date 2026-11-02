@@ -84,6 +84,10 @@ export class Engine extends EventTarget {
 
     await this._applySink();
     this.latency = await measureLatency(ctx.sampleRate);
+    if (typeof ctx.addEventListener === 'function') {
+      // Chrome avisa cuando la salida cambia sola (por ejemplo, al desconectar la interfaz USB)
+      ctx.addEventListener('sinkchange', () => { if (!this._settingSink) this._emit('sinkchange', { sinkId: ctx.sinkId }); });
+    }
     this._timer = setInterval(() => this._tick(), 25);
     if (ctx.state === 'suspended') { try { await ctx.resume(); } catch { /* se reanuda al tocar play */ } }
   }
@@ -102,10 +106,15 @@ export class Engine extends EventTarget {
 
   async _applySink() {
     const ctx = this.ctx;
+    this._settingSink = true;
     if (typeof ctx.setSinkId === 'function') {
       try { await ctx.setSinkId(this.out.deviceId === 'default' ? '' : this.out.deviceId); }
-      catch (e) { this._emit('warn', 'No se pudo usar esa salida de audio: ' + e.message); }
+      catch (e) {
+        this._emit('warn', 'No se pudo usar esa salida de audio: ' + e.message);
+        if (this.out.deviceId !== 'default') this._emit('sinkerror', { message: e.message });
+      }
     }
+    setTimeout(() => { this._settingSink = false; }, 400);
     this._buildOutput();
   }
 
@@ -553,6 +562,37 @@ export class Engine extends EventTarget {
         this._emit('ended');
       }
     }
+  }
+
+  // ───────────────────────── tono de prueba ─────────────────────────
+
+  /** Emite un tono grave por la izquierda y uno agudo por la derecha en la mezcla indicada ('main' | 'monitor'). */
+  async testTone(which = 'main') {
+    await this.init();
+    const ctx = this.ctx;
+    if (ctx.state !== 'running') { try { await ctx.resume(); } catch { /* noop */ } }
+    const bus = which === 'monitor' ? this.monitorBus : this.mainBus;
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    out.connect(bus);
+    const t0 = ctx.currentTime + 0.08;
+    const beeps = [[-1, 330, 0], [1, 495, 0.95]];
+    for (const [pan, freq, off] of beeps) {
+      const o = ctx.createOscillator(), p = ctx.createStereoPanner();
+      o.frequency.value = freq; p.pan.value = pan;
+      o.connect(p); p.connect(out);
+      const a = t0 + off;
+      out.gain.setValueAtTime(0, a);
+      out.gain.linearRampToValueAtTime(0.2, a + 0.03);
+      out.gain.setValueAtTime(0.2, a + 0.7);
+      out.gain.linearRampToValueAtTime(0, a + 0.76);
+      o.start(a); o.stop(a + 0.8);
+    }
+    const total = 0.95 + 0.85;
+    this._emit('test', { which, on: true });
+    await new Promise((r) => setTimeout(r, total * 1000 + 150));
+    try { out.disconnect(); } catch { /* noop */ }
+    this._emit('test', { which, on: false });
   }
 
   // ───────────────────────── pad ambiental ─────────────────────────

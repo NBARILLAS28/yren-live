@@ -1,7 +1,7 @@
 {
   "name": "yren-live",
   "productName": "YREN LIVE",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "YREN LIVE — Audio Sequence System. Tu alabanza, en perfecta armonía.",
   "main": "main.js",
   "author": "Nery Barillas",
@@ -10,7 +10,13 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --mac dmg",
-    "dist:universal": "electron-builder --mac dmg --universal"
+    "dist:universal": "electron-builder --mac dmg --universal",
+    "test": "node tests/run-engine.mjs && node tests/run-ui.mjs && node tests/run-layout.mjs && node tests/run-v02.mjs",
+    "test:engine": "node tests/run-engine.mjs",
+    "test:ui": "node tests/run-ui.mjs",
+    "test:electron": "node tests/electron-smoke.mjs",
+    "test:layout": "node tests/run-layout.mjs",
+    "test:v02": "node tests/run-v02.mjs"
   },
   "build": {
     "appId": "gt.diosdepactos.yrenlive",
@@ -37,6 +43,7 @@
   },
   "devDependencies": {
     "electron": "^33.2.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "puppeteer-core": "^25.16.0"
   }
 }

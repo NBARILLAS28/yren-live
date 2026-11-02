@@ -1,5 +1,5 @@
 // YREN LIVE — proceso principal de Electron
-const { app, BrowserWindow, Menu, protocol, session, systemPreferences, ipcMain, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, Menu, protocol, session, systemPreferences, ipcMain, powerSaveBlocker, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -16,8 +16,23 @@ app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 let win = null;
+let isPlaying = false;     // lo informa la ventana (hay una canción sonando)
+let allowClose = false;    // el usuario ya confirmó que quiere cerrar
+let quitRequested = false; // ⌘Q en lugar de cerrar solo la ventana
+
+/** Pregunta antes de cerrar si hay música sonando. En pruebas automáticas responde YREN_TEST_ANSWER=close|stay. */
+function confirmClose() {
+  if (process.env.YREN_TEST_ANSWER) return process.env.YREN_TEST_ANSWER === 'close';
+  const r = dialog.showMessageBoxSync(win, {
+    type: 'warning', title: 'YREN LIVE', buttons: ['Seguir reproduciendo', 'Cerrar de todos modos'], defaultId: 0, cancelId: 0,
+    message: 'Hay una canción sonando',
+    detail: 'Si cierras YREN LIVE ahora, la música se detendrá de golpe.',
+  });
+  return r === 1;
+}
 
 function createWindow() {
+  allowClose = false; isPlaying = false;
   win = new BrowserWindow({
     width: 1480,
     height: 920,
@@ -34,7 +49,13 @@ function createWindow() {
     },
   });
   win.loadURL('yren://app/index.html');
-  win.on('closed', () => { win = null; });
+  win.on('close', (e) => {
+    if (allowClose || !isPlaying) return;
+    e.preventDefault();
+    if (confirmClose()) { allowClose = true; if (quitRequested) app.quit(); else win.close(); }
+    else quitRequested = false;
+  });
+  win.on('closed', () => { win = null; isPlaying = false; });
 }
 
 function buildMenu() {
@@ -81,6 +102,11 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media'));
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media');
 
+  ipcMain.on('yren:playing', (_e, v) => { isPlaying = !!v; });
+  if (process.env.YREN_TEST) { // ganchos solo para pruebas automáticas
+    ipcMain.handle('yren:test-answer', (_e, a) => { process.env.YREN_TEST_ANSWER = a; return true; });
+    ipcMain.handle('yren:test-close', () => { if (win) win.close(); return !!(win && !win.isDestroyed()); });
+  }
   ipcMain.handle('yren:ask-mic', async () => {
     if (process.platform !== 'darwin') return true;
     try { return await systemPreferences.askForMediaAccess('microphone'); } catch { return false; }
@@ -92,6 +118,11 @@ app.whenReady().then(() => {
   buildMenu();
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+});
+
+app.on('before-quit', (e) => {
+  quitRequested = true;
+  if (isPlaying && !allowClose && win) { e.preventDefault(); win.close(); }
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

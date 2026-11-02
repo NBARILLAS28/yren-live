@@ -1,0 +1,152 @@
+<!doctype html><meta charset=utf-8><body>
+<script type="module">
+import { Engine } from '/app/js/engine.js';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+window.runEngine = async function () {
+  const R = {};
+  const eng = new Engine();
+  const warns = []; eng.addEventListener('warn', e => warns.push(e.detail));
+  await eng.init();
+  const ctx = eng.ctx;
+  R.state = ctx.state; R.sr = ctx.sampleRate; R.info = eng.getInfo(); R.warns = warns;
+  // sintéticos
+  const sr = ctx.sampleRate, dur = 10;
+  const mk = (fn) => { const b = ctx.createBuffer(2, dur * sr, sr); for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); for (let i = 0; i < d.length; i++) d[i] = fn(i / sr); } return b; };
+  const freqs = [440, 550, 660, 770, 880]; // cada 2 s
+  const music = mk(t => 0.4 * Math.sin(2 * Math.PI * freqs[Math.min(4, Math.floor(t / 2))] * t));
+  const click = mk(t => { const ph = t % 0.5; return ph < 0.01 ? 0.8 * Math.sin(2 * Math.PI * 2000 * ph) : 0; });
+  const song = { id: 's1', duration: dur, sections: [{id:'a',name:'A',start:0},{id:'b',name:'B',start:2},{id:'c',name:'C',start:4},{id:'d',name:'D',start:6},{id:'e',name:'E',start:8}],
+    tracks: [ { id:'m', name:'music', kind:'music', route:'main', transpose:true, vol:1, mute:false, solo:false },
+              { id:'k', name:'click', kind:'click', route:'monitor', transpose:false, vol:1, mute:false, solo:false } ] };
+  eng.loadSong(song, new Map([['m', music], ['k', click]]));
+  // tap main & monitor
+  const mkTap = (node) => { const sp = ctx.createScriptProcessor(2048, 2, 1); const rec = { chunks: [], t0: null, sr }; sp.onaudioprocess = e => { if (rec.t0 === null) rec.t0 = e.playbackTime; rec.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); }; node.connect(sp); const z = ctx.createGain(); z.gain.value = 0; sp.connect(z); z.connect(ctx.destination); return rec; };
+  const recMain = mkTap(eng.mainBus), recMon = mkTap(eng.monitorBus);
+  const flat = rec => { const n = rec.chunks.reduce((a, c) => a + c.length, 0), o = new Float32Array(n); let k = 0; for (const c of rec.chunks) { o.set(c, k); k += c.length; } return o; };
+  const freqIn = (rec, t0, t1) => { const d = flat(rec); const a = Math.floor((t0 - rec.t0) * sr), b = Math.floor((t1 - rec.t0) * sr); let zc = 0; for (let i = a + 1; i < b; i++) if (d[i - 1] < 0 && d[i] >= 0) zc++; return +(zc / (t1 - t0)).toFixed(1); };
+  const rmsIn = (rec, t0, t1) => { const d = flat(rec); const a = Math.floor((t0 - rec.t0) * sr), b = Math.floor((t1 - rec.t0) * sr); let s = 0; for (let i = a; i < b; i++) s += d[i] * d[i]; return +Math.sqrt(s / (b - a)).toFixed(4); };
+  const maxJump = (rec, t0, t1) => { const d = flat(rec); const a = Math.floor((t0 - rec.t0) * sr), b = Math.floor((t1 - rec.t0) * sr); let m = 0; for (let i = a + 1; i < b; i++) m = Math.max(m, Math.abs(d[i] - d[i - 1])); return +m.toFixed(3); };
+
+  // 1) reproducir normal
+  await eng.play();
+  const tPlay = ctx.currentTime;
+  await sleep(1500);
+  R.pos_after_1_5s = +eng.getPosition().toFixed(2);
+  const tn = ctx.currentTime;
+  R.freq_main_orig = freqIn(recMain, tn - 0.8, tn - 0.1); // sección A: 440
+  R.rms_monitor = rmsIn(recMon, tn - 0.8, tn - 0.1); R.rms_main_has_click = 'n/a';
+  // 2) transponer +2 en vivo
+  eng.setTranspose(2);
+  await sleep(700);
+  const t2 = ctx.currentTime; R.pos_before_jump = +eng.getPosition().toFixed(2);
+  R.freq_main_plus2 = freqIn(recMain, t2 - 0.2, t2 - 0.05); // 440*2^(2/12)=493.9
+  // 3) salto en cola a la sección D (6 s): se espera estar a mitad de una sección para que el salto sea "en cola"
+  for (let i = 0; i < 80; i++) { const q = eng.getPosition(); if (q > 2.3 && q < 3.3) break; await sleep(50); }
+  eng.queueJump(3);
+  R.pending = eng.getPending() !== null;
+  for (let i = 0; i < 160; i++) { const q = eng.getPosition(); if (q > 6.8 && q < 7.5) break; await sleep(25); }
+  R.pos_after_jump = +eng.getPosition().toFixed(2);
+  const t3 = ctx.currentTime;
+  R.freq_after_jump = freqIn(recMain, t3 - 0.45, t3 - 0.1); // D=770 +2 st = 864.3
+  R.max_sample_jump_window = maxJump(recMain, t3 - 2.4, t3 - 0.05);
+  // 4) tempo 90% (la tonalidad no debe cambiar); se vuelve al inicio para que la canción no termine durante la prueba
+  eng.seek(0.3);
+  eng.setTranspose(0); eng.setTempo(0.9);
+  for (let i = 0; i < 100; i++) { await sleep(100); const q = eng.getPosition() % 2; if (i > 12 && q > 0.8 && q < 1.4) break; }
+  const t4 = ctx.currentTime; R.pos_tempo = +eng.getPosition().toFixed(2);
+  R.freq_tempo90 = freqIn(recMain, t4 - 0.4, t4 - 0.05);
+  R.expected_tempo90 = freqs[Math.min(4, Math.floor(R.pos_tempo / 2))];
+  // 5) bucle de la sección en curso
+  const cur = eng.sectionIndexAt(eng.getPosition()); const s0 = song.sections[cur].start, s1 = eng.sectionEnd(cur);
+  R.loopSet = eng.setLoop(s0, s1);
+  eng.setTempo(1);
+  await sleep(5500);
+  R.pos_looping = +eng.getPosition().toFixed(2); R.loop_region = [s0, s1];
+  eng.clearLoop();
+  // 6) pausa y seek
+  eng.pause(); R.paused_pos = +eng.getPosition().toFixed(2);
+  eng.seek(1.0); await eng.play(); await sleep(1000);
+  R.pos_after_seek_play = +eng.getPosition().toFixed(2);
+  // 7) solo/mute
+  song.tracks[1].mute = true; eng.refreshMix();
+  await sleep(300);
+  const t5 = ctx.currentTime; R.rms_monitor_muted = rmsIn(recMon, t5 - 0.2, t5 - 0.05);
+  // 8) salidas: modo split y pairs
+  await eng.setOutput({ mode: 'split' }); R.outSplit = eng.getInfo();
+  await eng.setOutput({ mode: 'pairs' }); R.outPairs = eng.getInfo();
+  eng.stop();
+  return R;
+};
+
+window.runJump = async function (rate) {
+  const eng = new Engine(); await eng.init(); const ctx = eng.ctx, sr = ctx.sampleRate, dur = 10;
+  const mk = (fn) => { const b = ctx.createBuffer(2, dur * sr, sr); for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); for (let i = 0; i < d.length; i++) d[i] = fn(i / sr); } return b; };
+  const freqs = [440, 550, 660, 770, 880];
+  const music = mk(t => 0.4 * Math.sin(2 * Math.PI * freqs[Math.min(4, Math.floor(t / 2))] * t));
+  const song = { id: 's1', duration: dur, sections: [0,2,4,6,8].map((s,i)=>({id:'s'+i,name:'S'+i,start:s})), tracks: [{ id:'m', name:'music', kind:'music', route:'main', transpose:true, vol:1, mute:false, solo:false }] };
+  eng.loadSong(song, new Map([['m', music]]));
+  const sp = ctx.createScriptProcessor(2048, 2, 1); const chunks = []; let t0 = null;
+  sp.onaudioprocess = e => { if (t0 === null) t0 = e.playbackTime; chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+  eng.mainBus.connect(sp); const z = ctx.createGain(); z.gain.value = 0; sp.connect(z); z.connect(ctx.destination);
+  eng.setTempo(rate);
+  await eng.play();
+  await sleep(300);
+  eng.queueJump(3); // al terminar la sección 0 (t=2.0 s de canción)
+  await sleep(3500);
+  const a0 = eng.pending ? eng.pending.anchor.ctxTime : null;
+  const d = new Float32Array(chunks.reduce((a, c) => a + c.length, 0)); let k = 0; for (const c of chunks) { d.set(c, k); k += c.length; }
+  // localizar el cambio de frecuencia: ventanas de 20 ms con cruces por cero
+  const win = Math.floor(0.02 * sr); const fr = [];
+  for (let i = 0; i + win < d.length; i += Math.floor(win / 2)) { let zc = 0; for (let j = i + 1; j < i + win; j++) if (d[j - 1] < 0 && d[j] >= 0) zc++; fr.push([t0 + i / sr, zc / (win / sr)]); }
+  // primer instante audible (rms > .05) y primer instante con f > 650
+  let tStart = null, tSwitch = null;
+  for (let i = 0; i < fr.length; i++) { const idx = Math.floor((fr[i][0] - t0) * sr); const r = Math.abs(d[idx + 100] || 0); }
+  const energy = (i) => { let s = 0; for (let j = i; j < i + win; j++) s += d[j] * d[j]; return Math.sqrt(s / win); };
+  for (let i = 0; i + win < d.length; i += 50) { if (energy(i) > 0.1) { tStart = t0 + i / sr; break; } }
+  for (const [t, f] of fr) { if (t > tStart + 0.5 && f > 650 && energy(Math.floor((t - t0) * sr)) > 0.1) { tSwitch = t; break; } }
+  return { rate, audibleStart: +tStart.toFixed(3), switchAt: +tSwitch.toFixed(3), measuredSectionLen: +(tSwitch - tStart).toFixed(3), expectedSectionLen: +(2 / rate).toFixed(3), anchorAfter: eng.anchor, pos: +eng.getPosition().toFixed(2) };
+};
+
+window.runStress = async function (seed, ms = 25000) {
+  const errs = []; window.addEventListener('error', e => errs.push(e.message)); window.addEventListener('unhandledrejection', e => errs.push('rej ' + (e.reason && e.reason.message)));
+  let x = seed; const rnd = () => (x = (x * 1664525 + 1013904223) % 4294967296) / 4294967296;
+  const eng = new Engine(); await eng.init(); const ctx = eng.ctx, sr = ctx.sampleRate, dur = 20;
+  const mk = (fn, ch = 2) => { const b = ctx.createBuffer(ch, dur * sr, sr); for (let c = 0; c < ch; c++) { const d = b.getChannelData(c); for (let i = 0; i < d.length; i++) d[i] = fn(i / sr); } return b; };
+  const bufs = new Map([['a', mk(t => 0.3 * Math.sin(2 * Math.PI * 220 * t))], ['b', mk(t => 0.3 * Math.sin(2 * Math.PI * 330 * t), 1)], ['c', mk(t => (t % 0.5 < 0.01 ? 0.6 : 0), 1)]]);
+  const mkSong = (id) => ({ id, duration: dur, sections: [0, 5, 10, 15].map((s, i) => ({ id: id + i, name: 'S' + i, start: s })),
+    tracks: [ { id: 'a', name: 'a', kind: 'music', route: 'main', transpose: true, vol: 1 }, { id: 'b', name: 'b', kind: 'music', route: 'both', transpose: true, vol: 1 }, { id: 'c', name: 'c', kind: 'click', route: 'monitor', transpose: false, vol: 1 } ] });
+  let song = mkSong('s1'); eng.loadSong(song, bufs);
+  const log = []; const ops = [
+    () => eng.play(), () => eng.pause(), () => eng.seek(rnd() * 19), () => eng.queueJump(Math.floor(rnd() * 4)),
+    () => eng.setTranspose(Math.floor(rnd() * 13) - 6), () => eng.setTempo(0.8 + rnd() * 0.4),
+    () => { const i = eng.sectionIndexAt(eng.getPosition()); eng.setLoop(song.sections[Math.max(0, i)].start, eng.sectionEnd(Math.max(0, i))); },
+    () => eng.clearLoop(), () => eng.cancelPending(), () => eng.stop(),
+    () => { song.tracks[1].mute = !song.tracks[1].mute; eng.refreshMix(); }, () => { song.tracks[0].solo = !song.tracks[0].solo; eng.refreshMix(); },
+    () => { song = mkSong('s' + Math.floor(rnd() * 99)); eng.loadSong(song, bufs); },
+    () => eng.padSet({ on: rnd() > 0.5, root: Math.floor(rnd() * 12) }),
+  ];
+  const t0 = performance.now(); let n = 0;
+  while (performance.now() - t0 < ms) { const k = Math.floor(rnd() * ops.length); try { const r = ops[k](); if (r && r.then) await r; } catch (e) { errs.push('op' + k + ': ' + e.message); } n++; await sleep(Math.floor(rnd() * 350)); const p = eng.getPosition(); if (!(p >= 0 && p <= dur + 0.1)) errs.push('pos fuera de rango ' + p); }
+  // al final debe poder reproducir normalmente
+  eng.clearLoop(); eng.cancelPending(); eng.stop(); eng.setTempo(1); eng.setTranspose(0);
+  song.tracks.forEach(t => { t.mute = false; t.solo = false; }); eng.refreshMix();
+  await eng.play(); const a = eng.getPosition(); await sleep(1000); const b = eng.getPosition();
+  return { ops: n, errs: errs.slice(0, 8), finalAdvance: +(b - a).toFixed(2), playing: eng.playing };
+};
+
+window.runToneTest = async function (which) {
+  const eng = new Engine(); await eng.init(); const ctx = eng.ctx, sr = ctx.sampleRate;
+  const chunks = [[], []]; let t0 = null;
+  const sp = ctx.createScriptProcessor(2048, 2, 2);
+  sp.onaudioprocess = (e) => { if (t0 === null) t0 = e.playbackTime; chunks[0].push(new Float32Array(e.inputBuffer.getChannelData(0))); chunks[1].push(new Float32Array(e.inputBuffer.getChannelData(1))); };
+  const bus = which === 'monitor' ? eng.monitorBus : eng.mainBus; bus.connect(sp); const z = ctx.createGain(); z.gain.value = 0; sp.connect(z); z.connect(ctx.destination);
+  const flat = (a) => { const n = a.reduce((s, c) => s + c.length, 0), o = new Float32Array(n); let k = 0; for (const c of a) { o.set(c, k); k += c.length; } return o; };
+  const start = ctx.currentTime; await eng.testTone(which);
+  const L = flat(chunks[0]), Rr = flat(chunks[1]);
+  const freq = (d, a, b) => { const i0 = Math.floor((a - t0) * sr), i1 = Math.floor((b - t0) * sr); let zc = 0; for (let i = i0 + 1; i < i1; i++) if (d[i - 1] < 0 && d[i] >= 0) zc++; return zc / (b - a); };
+  const rms = (d, a, b) => { const i0 = Math.floor((a - t0) * sr), i1 = Math.floor((b - t0) * sr); let s = 0; for (let i = i0; i < i1; i++) s += d[i] * d[i]; return Math.sqrt(s / (i1 - i0)); };
+  const w1 = [start + 0.3, start + 0.7], w2 = [start + 1.35, start + 1.75];
+  return { firstLeftFreq: +freq(L, ...w1).toFixed(0), firstLeftRms: +rms(L, ...w1).toFixed(3), firstRightRms: +rms(Rr, ...w1).toFixed(4),
+           secondRightFreq: +freq(Rr, ...w2).toFixed(0), secondRightRms: +rms(Rr, ...w2).toFixed(3), secondLeftRms: +rms(L, ...w2).toFixed(4) };
+};
+</script>
