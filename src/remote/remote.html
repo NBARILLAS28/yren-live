@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>YREN LIVE · Control</title>
+<style>
+  :root { --bg:#040914; --panel:#0b1730; --line:#1d3a6b; --cyan:#19d3ff; --blue:#1b6dff; --silver:#dbe6f7; --muted:#7f95b6; --warn:#ffb547; --danger:#ff5c7a; --ok:#3ddc97; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--silver); font: 16px/1.3 -apple-system, system-ui, Segoe UI, Roboto, sans-serif; }
+  body { padding: max(10px, env(safe-area-inset-top)) 12px max(14px, env(safe-area-inset-bottom)); max-width: 640px; margin: 0 auto; }
+  button { font: inherit; color: var(--silver); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 10px; touch-action: manipulation; }
+  button:active { background: #123060; }
+  button.on { border-color: var(--cyan); color: var(--cyan); }
+  button:disabled { opacity: .4; }
+  .top { display: flex; align-items: center; gap: 10px; }
+  .top .t { flex: 1; min-width: 0; }
+  .title { font-size: 22px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .chip { text-align: center; border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px; background: var(--panel); }
+  .chip small { display: block; font-size: 9px; letter-spacing: .15em; color: var(--muted); }
+  .chip b { font-size: 24px; color: var(--cyan); }
+  .bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 10px 0 2px; }
+  .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--blue), var(--cyan)); }
+  .clock { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+  .row { display: grid; gap: 10px; margin-top: 12px; }
+  .r3 { grid-template-columns: 1fr 1.5fr 1fr; }
+  .r2 { grid-template-columns: 1fr 1fr; }
+  .play { font-size: 40px; padding: 18px; background: linear-gradient(180deg, #1b6dff, #0d3d99); border-color: #5fa0ff; }
+  .play.playing { background: linear-gradient(180deg, #19d3ff, #0b8fb3); color: #02202a; }
+  .secs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .secs button { flex: 1 1 28%; padding: 16px 6px; font-weight: 600; }
+  .secs button.cur { border-color: var(--cyan); background: rgba(25,211,255,.14); color: #fff; }
+  .secs button.next { border-color: var(--warn); color: var(--warn); }
+  .ctl { display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 6px; }
+  .ctl .v { flex: 1; text-align: center; }
+  .ctl .v b { font-size: 26px; display: block; }
+  .ctl .v small { color: var(--muted); font-size: 11px; letter-spacing: .1em; }
+  .ctl button { width: 64px; font-size: 26px; padding: 10px 0; }
+  .songs { margin-top: 12px; display: grid; gap: 6px; }
+  .songs button { text-align: left; padding: 12px 14px; display: flex; justify-content: space-between; }
+  .songs button.cur { border-color: var(--cyan); }
+  .st { text-align: center; font-size: 12px; color: var(--muted); margin-top: 12px; }
+  .st.bad { color: var(--danger); }
+  #login { text-align: center; padding-top: 12vh; }
+  #login h1 { font-size: 28px; letter-spacing: .12em; margin: 0 0 6px; } #login h1 span { color: var(--cyan); }
+  #pin { font-size: 36px; width: 9ch; text-align: center; letter-spacing: .3em; background: var(--panel); color: var(--silver); border: 1px solid var(--line); border-radius: 14px; padding: 10px; margin: 18px 0 12px; }
+  #err { color: var(--danger); min-height: 1.4em; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="login">
+  <h1>YREN<span>LIVE</span></h1>
+  <div class="sub">Control remoto · escribe el PIN que aparece en la app</div>
+  <input id="pin" inputmode="numeric" autocomplete="off" maxlength="8" aria-label="PIN"><br>
+  <button id="go" style="padding:14px 34px">Entrar</button>
+  <div id="err"></div>
+</div>
+
+<div id="app" class="hidden">
+  <div class="top">
+    <div class="t"><div class="title" id="title">—</div><div class="sub" id="artist"></div></div>
+    <div class="chip"><small>TONO</small><b id="key">—</b></div>
+    <div class="chip"><small>BPM</small><b id="bpm">—</b></div>
+  </div>
+  <div class="bar"><i id="barI"></i></div>
+  <div class="clock"><span id="cur">0:00</span><span id="sec"></span><span id="dur">0:00</span></div>
+
+  <div class="row r3">
+    <button data-c="prev">⏮</button>
+    <button class="play" id="play" data-c="toggle">▶</button>
+    <button data-c="next">⏭</button>
+  </div>
+  <div class="row r2">
+    <button data-c="prevSec">‹ Sección</button>
+    <button data-c="nextSec">Sección ›</button>
+  </div>
+  <div class="secs" id="secs"></div>
+
+  <div class="row r2">
+    <div class="ctl"><button data-c="keyDown">−</button><div class="v"><b id="kv">—</b><small>TONALIDAD</small></div><button data-c="keyUp">+</button></div>
+    <div class="ctl"><button data-c="tempoDown">−</button><div class="v"><b id="tv">100%</b><small>TEMPO</small></div><button data-c="tempoUp">+</button></div>
+  </div>
+  <div class="row r3" style="grid-template-columns:1fr 1fr 1fr">
+    <button data-c="loop" id="loop">⟳ Bucle</button>
+    <button data-c="pad" id="pad">Pad</button>
+    <button data-c="fade" id="fade">↘ Fundido</button>
+  </div>
+  <div class="songs" id="songs"></div>
+  <div class="st" id="st">Conectando…</div>
+</div>
+
+<script>
+(function () {
+  var $ = function (i) { return document.getElementById(i); };
+  var pin = '', S = null, es = null, lastMsg = 0, anchor = null;
+  try { pin = localStorage.getItem('yren-pin') || ''; } catch (e) {}
+  var fmt = function (s) { s = Math.max(0, s || 0); return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); };
+
+  function post(cmd, arg) {
+    return fetch('/api/cmd', { method: 'POST', headers: { 'x-pin': pin, 'content-type': 'application/json' }, body: JSON.stringify({ cmd: cmd, arg: arg }) })
+      .then(function (r) { if (r.status === 401) { logout('PIN incorrecto'); } if (r.status === 429) { $('st').textContent = 'Demasiados intentos, espera un momento'; } if (navigator.vibrate) navigator.vibrate(12); });
+  }
+  function logout(msg) { try { localStorage.removeItem('yren-pin'); } catch (e) {} pin = ''; if (es) es.close(); $('app').classList.add('hidden'); $('login').classList.remove('hidden'); $('err').textContent = msg || ''; }
+
+  function render() {
+    if (!S) return;
+    $('title').textContent = S.title || 'Sin canción'; $('artist').textContent = S.artist || '';
+    $('key').textContent = S.key || '—'; $('bpm').textContent = S.bpm || '—';
+    $('kv').textContent = S.key || '—'; $('tv').textContent = (S.tempo || 100) + '%';
+    var play = $('play'); play.textContent = S.playing ? '⏸' : '▶'; play.classList.toggle('playing', !!S.playing);
+    $('loop').classList.toggle('on', !!S.loop); $('pad').classList.toggle('on', !!S.padOn); $('pad').textContent = S.padOn ? 'Pad encendido' : 'Pad';
+    $('fade').classList.toggle('on', !!S.fading);
+    $('dur').textContent = fmt(S.dur);
+    var box = $('secs'), names = (S.sections || []).join('|');
+    if (box.dataset.n !== names) {
+      box.dataset.n = names; box.innerHTML = '';
+      (S.sections || []).forEach(function (n, i) { var b = document.createElement('button'); b.textContent = n; b.dataset.i = i; b.onclick = function () { post('section', i); }; box.appendChild(b); });
+    }
+    [].forEach.call(box.children, function (b, i) { b.classList.toggle('cur', i === S.cur); b.classList.toggle('next', i === S.pending); });
+    var sl = $('songs'), sn = (S.songs || []).map(function (s) { return s.t + s.k; }).join('|') + '#' + S.idx + S.playing;
+    if (sl.dataset.n !== sn) {
+      sl.dataset.n = sn; sl.innerHTML = '';
+      (S.songs || []).forEach(function (s, i) { var b = document.createElement('button'); b.className = i === S.idx ? 'cur' : ''; b.disabled = !!S.playing && i !== S.idx; b.innerHTML = '<span></span><span style="color:#19d3ff"></span>'; b.children[0].textContent = (i + 1) + '. ' + s.t; b.children[1].textContent = s.k; b.onclick = function () { post('song', i); }; sl.appendChild(b); });
+    }
+    anchor = { pos: S.pos || 0, at: performance.now(), playing: !!S.playing, rate: S.rate || 1 };
+  }
+  function tick() {
+    if (S && anchor) {
+      var p = anchor.pos + (anchor.playing ? (performance.now() - anchor.at) / 1000 * anchor.rate : 0);
+      p = Math.min(p, S.dur || p);
+      $('cur').textContent = fmt(p); $('barI').style.width = (S.dur ? (p / S.dur) * 100 : 0) + '%';
+      $('sec').textContent = S.secName || '';
+    }
+    var st = $('st');
+    if (S) { var ok = performance.now() - lastMsg < 40000; st.textContent = ok ? 'Conectado' : 'Reconectando…'; st.className = 'st' + (ok ? '' : ' bad'); }
+    requestAnimationFrame(tick);
+  }
+  function connect() {
+    if (es) es.close();
+    es = new EventSource('/api/events?pin=' + encodeURIComponent(pin));
+    es.onmessage = function (e) { try { S = JSON.parse(e.data); lastMsg = performance.now(); $('login').classList.add('hidden'); $('app').classList.remove('hidden'); try { localStorage.setItem('yren-pin', pin); } catch (x) {} render(); } catch (x) {} };
+    es.onerror = function () {
+      fetch('/api/state?pin=' + encodeURIComponent(pin)).then(function (r) { if (r.status === 401) logout('PIN incorrecto'); else if (r.status === 429) logout('Demasiados intentos. Espera 30 segundos.'); });
+    };
+  }
+  document.addEventListener('click', function (e) { var c = e.target.closest && e.target.closest('[data-c]'); if (c) post(c.dataset.c); });
+  $('go').onclick = function () { pin = $('pin').value.trim(); if (pin.length < 4) { $('err').textContent = 'El PIN tiene al menos 4 dígitos'; return; } $('err').textContent = ''; connect(); };
+  $('pin').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('go').onclick(); });
+  if (pin) connect();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

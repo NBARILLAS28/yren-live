@@ -63,6 +63,7 @@
         <div class="now-chips">
           <div class="chip big"><span class="chip-k">TONO</span><span class="chip-v" id="chipKey">—</span></div>
           <div class="chip big"><span class="chip-k">BPM</span><span class="chip-v" id="chipBpm">—</span></div>
+          <button class="btn ghost" id="btnStage" title="Vista de escenario: letra y acordes en grande (S)">🎤 Escenario</button>
           <button class="btn ghost" id="btnEdit" disabled>Editar</button>
         </div>
       </div>
@@ -154,6 +155,35 @@
     </section>
   </main>
 
+  <div class="stage-view" id="stageView" hidden role="dialog" aria-label="Vista de escenario">
+    <div class="sv-top">
+      <div class="sv-title"><div id="svTitle">—</div><div id="svArtist" class="muted"></div></div>
+      <div class="sv-chips">
+        <div class="sv-chip"><small>TONO</small><b id="svKey">—</b></div>
+        <div class="sv-chip"><small>BPM</small><b id="svBpm">—</b></div>
+      </div>
+      <div class="sv-btns">
+        <button class="btn ghost sm" id="svFontDown" title="Letra más pequeña">A−</button>
+        <button class="btn ghost sm" id="svFontUp" title="Letra más grande">A+</button>
+        <button class="btn" id="svClose">✕ Cerrar</button>
+      </div>
+    </div>
+    <div class="sv-now">
+      <div class="sv-sec" id="svSec">—</div>
+      <div class="sv-next" id="svNext"></div>
+      <div class="sv-clock" id="svClock"></div>
+    </div>
+    <div class="sv-bar"><i id="svBar"></i></div>
+    <div class="sv-notes" id="svNotes" hidden></div>
+    <div class="sv-lyrics" id="svLyrics"></div>
+    <div class="sv-foot">
+      <button class="btn ghost" id="svPrevSec">‹ Sección</button>
+      <button class="tbtn play" id="svPlay" title="Reproducir / Pausa">▶</button>
+      <button class="btn ghost" id="svNextSec">Sección ›</button>
+      <button class="btn ghost" id="svFade">↘ Fundido</button>
+    </div>
+  </div>
+
   <div class="alert-overlay" id="outAlert" hidden role="alertdialog" aria-live="assertive" aria-labelledby="alertTitle">
     <div class="alert-card">
       <div class="alert-icon">⚠</div>
@@ -167,6 +197,7 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="count-badge" id="countBadge" hidden aria-live="assertive"></div>
   <div class="loading" id="loading" hidden><div class="spinner"></div><div id="loadingText">Cargando…</div><div class="bar" id="loadingBarWrap" hidden><i id="loadingBar"></i></div></div>
   <div class="backup-banner" id="backupBanner" hidden role="status">
     <span id="backupBannerText">Hace tiempo que no haces un respaldo.</span>
@@ -208,6 +239,27 @@
         <button type="button" class="btn ghost sm" id="btnTestMon" title="Tono grave por la izquierda y agudo por la derecha, solo en la mezcla Monitor">🔊 Probar Monitor</button>
         <span class="muted small" id="testInfo">Suena un tono grave por la izquierda y uno agudo por la derecha.</span>
       </div>
+      <h4>Control remoto (celular o tablet)</h4>
+      <div id="remoteBox">
+        <label class="check"><input type="checkbox" id="remoteOn"> Activar el control remoto en la red Wi-Fi</label>
+        <div class="grid2">
+          <label class="field">PIN (4 a 8 dígitos)<input type="text" id="remotePin" inputmode="numeric" maxlength="8" autocomplete="off"></label>
+          <div class="row-btns" style="align-self:end"><button type="button" class="btn ghost sm" id="remoteNewPin">PIN nuevo</button></div>
+        </div>
+        <div class="remote-info"><div id="remoteQr" class="qr"></div><div id="remoteInfo" class="muted small">Apagado. Al activarlo verás una dirección y un código QR para abrir en el celular (debe estar en la misma red Wi-Fi). Mac puede preguntar si permite conexiones entrantes: elige «Permitir».</div></div>
+      </div>
+      <p class="muted small" id="remoteNA" hidden>El control remoto solo está disponible en la aplicación de escritorio.</p>
+      <h4>Pedal / MIDI</h4>
+      <p class="muted small">Conecta tu pedal o controlador MIDI, pulsa <b>Aprender</b> junto a una acción y pisa el botón que quieras. <span id="midiStatus"></span></p>
+      <div id="midiMap" class="midi-map"></div>
+      <div class="row-btns"><button type="button" class="btn ghost sm" id="midiClear">Borrar asignaciones</button></div>
+      <h4>Cuenta previa</h4>
+      <div class="grid2">
+        <label class="field" title="Al arrancar una canción desde el inicio, suena un click de preparación al ritmo de la canción">Cuenta previa al empezar
+          <select id="countSel"><option value="0">Sin cuenta</option><option value="4">4 tiempos (1 compás)</option><option value="8">8 tiempos (2 compases)</option></select>
+        </label>
+        <label class="check" style="align-self:end"><input type="checkbox" id="countMain"> También por la sala (normalmente solo al monitor)</label>
+      </div>
       <h4>Transiciones y memoria</h4>
       <div class="grid3">
         <label class="field">Duración del fundido
@@ -243,13 +295,24 @@
         <label class="field">BPM original<input type="number" id="edBpm" min="30" max="260" step="0.1"></label>
         <label class="field">Duración<input type="text" id="edDur" disabled></label>
       </div>
+      <h4>Letra, acordes y notas</h4>
+      <textarea id="edLyrics" rows="7" spellcheck="false" placeholder="# Verso 1&#10;[G]Santo, [D]santo, [Em]santo es el [C]Señor&#10;&#10;# Coro&#10;También puedes escribir los acordes en una línea encima de la letra:&#10;G        D&#10;Digno es el Cordero"></textarea>
+      <p class="muted small">Escribe los acordes en la <b>tonalidad original</b>, entre corchetes <code>[G]</code> o en una línea encima. Sirven nombres como <code>G</code>, <code>F#m7</code> o <code>Sol</code>, <code>Lam</code>. Al subir o bajar el tono, los acordes cambian solos. Los encabezados (<code># Coro</code> o <code>Coro:</code>) hacen que la vista de escenario se mueva sola a esa parte.</p>
+      <label class="field">Notas para la banda<textarea id="edNotes" rows="2" placeholder="Ej.: entra solo el piano · segunda vez sin batería · capo 2"></textarea></label>
       <h4>Pistas (stems)</h4>
       <div class="tracks-table" id="edTracks"></div>
+      <div class="row-btns genclick">
+        <label class="check" title="Crea una pista de click con el BPM de la canción (solo al monitor) si tus stems no traen click"><input type="checkbox" id="edGenClick"> Generar click con el BPM</label>
+        <label class="muted small">Compás <select id="edClickBeats"><option value="2">2</option><option value="3">3</option><option value="4" selected>4</option><option value="6">6</option></select></label>
+        <label class="muted small">Primer tiempo en <input type="number" id="edClickOffset" min="0" step="0.01" value="0" style="width:80px"> s</label>
+      </div>
       <h4>Secciones</h4>
       <div id="edSections" class="sections-edit"></div>
       <div class="row-btns">
         <button type="button" class="btn ghost sm" id="edAddSection">+ Sección en la posición actual</button>
         <button type="button" class="btn ghost sm" id="edPresetSections">Plantilla típica (Intro / Verso / Coro…)</button>
+        <button type="button" class="btn ghost sm" id="edImportMarkers" title="Desde un WAV con marcadores (cue), o un .txt/.csv de Audacity, Reaper o una lista «0:45 Coro»">Importar marcadores…</button>
+        <input type="file" id="markersInput" accept=".wav,.txt,.csv,.tsv,.lab,.mrk" hidden>
       </div>
       <div class="dlg-actions split">
         <button type="button" class="btn danger" id="edDelete">Eliminar canción de la biblioteca</button>

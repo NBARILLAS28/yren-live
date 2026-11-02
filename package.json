@@ -1,7 +1,7 @@
 {
   "name": "yren-live",
   "productName": "YREN LIVE",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "YREN LIVE — Audio Sequence System. Tu alabanza, en perfecta armonía.",
   "main": "main.js",
   "author": "Nery Barillas",
@@ -11,13 +11,15 @@
     "start": "electron .",
     "dist": "electron-builder --mac dmg",
     "dist:universal": "electron-builder --mac dmg --universal",
-    "test": "node tests/run-engine.mjs && node tests/run-ui.mjs && node tests/run-layout.mjs && node tests/run-v02.mjs && node tests/run-v03.mjs",
+    "test": "node tests/unit-lyrics.mjs && node tests/unit-markers.mjs && node tests/unit-midi.mjs && node tests/run-remote.mjs && node tests/run-engine.mjs && node tests/run-ui.mjs && node tests/run-layout.mjs && node tests/run-v02.mjs && node tests/run-v03.mjs && node tests/run-v04.mjs",
     "test:engine": "node tests/run-engine.mjs",
     "test:ui": "node tests/run-ui.mjs",
     "test:electron": "node tests/electron-smoke.mjs",
     "test:layout": "node tests/run-layout.mjs",
     "test:v02": "node tests/run-v02.mjs",
-    "test:v03": "node tests/run-v03.mjs"
+    "test:v03": "node tests/run-v03.mjs",
+    "test:unit": "node tests/unit-lyrics.mjs && node tests/unit-markers.mjs && node tests/unit-midi.mjs && node tests/run-remote.mjs",
+    "test:v04": "node tests/run-v04.mjs"
   },
   "build": {
     "appId": "gt.diosdepactos.yrenlive",
@@ -25,6 +27,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "remote-server.js",
       "src/**/*",
       "package.json"
     ],
@@ -46,5 +49,8 @@
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "puppeteer-core": "^25.16.0"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
   }
 }

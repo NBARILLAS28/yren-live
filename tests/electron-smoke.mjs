@@ -56,6 +56,29 @@ try {
   const saved = fs.readdirSync(dlDir).filter((f) => f.endsWith('.yrenpack'));
   const head = saved[0] ? fs.readFileSync(path.join(dlDir, saved[0])).subarray(0, 8).toString() : '';
   check('Respaldo: se guarda el archivo .yrenpack y la app lo registra', bk.ok === true && saved.length === 1 && head === 'YRENPK1\n' && Date.now() - bk.last < 30000, saved.join(',') + ' · ' + JSON.stringify(head));
+  // control remoto (celular) y MIDI en Electron real
+  const rem = await page.evaluate(async () => { const r = await window.__yren.api.setRemote(true, { port: 0 }); const st = window.__yren.state; return { ok: r.ok, port: st.remote.port, qr: (st.remote.qr || [])[0] || '', pin: st.settings.remotePin, saved: st.settings.remoteOn }; });
+  const base = `http://127.0.0.1:${rem.port}`;
+  const j = async (u, o) => { const r = await fetch(base + u, o); return { status: r.status, text: await r.text() }; };
+  const page0 = await j('/');
+  const noPin = await j('/api/state');
+  const stOk = await j('/api/state', { headers: { 'x-pin': rem.pin } });
+  check('Control remoto: se activa, da QR y PIN, y la página se entrega', rem.ok && rem.qr.startsWith('data:image/png') && /^\d{4}$/.test(rem.pin) && page0.status === 200 && page0.text.includes('YREN') && rem.saved === true, `puerto ${rem.port}`);
+  check('Control remoto: sin PIN se rechaza; con PIN devuelve el estado', noPin.status === 401 && stOk.status === 200 && 'title' in JSON.parse(stOk.text));
+  await page.evaluate(() => { window.__yren.state.padOn = false; });
+  const cmd = await j('/api/cmd', { method: 'POST', headers: { 'x-pin': rem.pin, 'content-type': 'application/json' }, body: JSON.stringify({ cmd: 'pad' }) });
+  await sleep(500);
+  const padOn = await page.evaluate(() => window.__yren.state.padOn);
+  check('Control remoto: un comando desde el «celular» llega a la app (pad)', cmd.status === 200 && padOn === true);
+  await page.evaluate(() => window.__yren.api.runCommand('pad')); await sleep(200);
+  await page.evaluate(() => window.__yren.api.setRemote(false)); await sleep(200);
+  const down = await fetch(base + '/').then(() => false, () => true);
+  check('Control remoto: al apagarlo se cierra el puerto', down);
+  const midiOk = await page.evaluate(async () => { const r = await window.__yren.api.midi.init(); return r; });
+  check('MIDI: el permiso está concedido (en este servidor de pruebas no hay equipo MIDI, así que basta con que no sea «NotAllowed»)', midiOk.ok === true || (midiOk.name !== 'NotAllowedError' && midiOk.name !== 'SecurityError'), JSON.stringify(midiOk));
+  const sink = await page.evaluate(async () => { try { await window.__yren.engine.ctx.setSinkId('dispositivo-que-no-existe'); return 'ok'; } catch (e) { return e.name; } });
+  check('Elegir una salida de audio no está bloqueado por permisos (error esperado: dispositivo inexistente, no «NotAllowed»)', sink !== 'NotAllowedError', 'resultado: ' + sink);
+  await page.evaluate(() => window.__yren.engine.ctx.setSinkId(''));
   // cierre con música sonando: debe preguntar
   const notPlaying = await page.evaluate(async () => { window.yren.setPlaying(false); await new Promise((r) => setTimeout(r, 200)); return true; });
   await page.evaluate(() => window.yren.setPlaying(true)); await sleep(300);

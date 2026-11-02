@@ -5,7 +5,7 @@ const FLAT = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
 // Tonalidades mayores que se escriben con bemoles por convención
 const FLAT_MAJORS = new Set([1, 3, 5, 8, 10]); // Db Eb F Ab Bb
 
-export const APP_VERSION = '0.3.0';
+export const APP_VERSION = '0.4.0';
 
 export const ROOT_OPTIONS = ['C', 'C#/Db', 'D', 'D#/Eb', 'E', 'F', 'F#/Gb', 'G', 'G#/Ab', 'A', 'A#/Bb', 'B'];
 

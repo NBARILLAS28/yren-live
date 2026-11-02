@@ -54,6 +54,7 @@ export class Engine extends EventTarget {
     this.outInfo = { channels: 2, mode: 'main-only', maxChannels: 2, warning: '' };
     this._timer = null;
     this._outNodes = [];
+    this._autoIdx = -2; this._count = null;
     this.fading = null; this.songOut = null; this.ghosts = null; this.nearEndSec = 0; this._nearFired = false;
   }
 
@@ -188,6 +189,21 @@ export class Engine extends EventTarget {
     return mono;
   }
 
+  /** Click con el BPM de la canción: un AudioBuffer mono de `duration` segundos. El primer tiempo de cada compás suena más agudo. */
+  static makeClickBuffer(ctx, duration, bpm, offset = 0, beatsPerBar = 4) {
+    const sr = ctx.sampleRate, len = Math.max(1, Math.ceil(duration * sr));
+    const buf = ctx.createBuffer(1, len, sr), d = buf.getChannelData(0);
+    const beat = 60 / bpm, burst = Math.floor(sr * 0.03);
+    for (let n = 0; ; n++) {
+      const t = offset + n * beat;
+      if (t >= duration) break;
+      if (t < 0) continue;
+      const start = Math.round(t * sr), f = n % beatsPerBar === 0 ? 2400 : 1600;
+      for (let i = 0; i < burst && start + i < len; i++) d[start + i] = 0.8 * Math.sin((2 * Math.PI * f * i) / sr) * Math.exp((-6 * i) / burst);
+    }
+    return buf;
+  }
+
   /** Memoria aproximada (bytes) que ocupa un AudioBuffer. */
   static bufferBytes(buf) { return buf ? buf.length * buf.numberOfChannels * 4 : 0; }
 
@@ -199,7 +215,7 @@ export class Engine extends EventTarget {
     this.unload();
     const ctx = this.ctx;
     this.song = song;
-    this.rate = 1; this.semis = 0; this.loop = null; this.pending = null; this._nearFired = false;
+    this.rate = 1; this.semis = 0; this.loop = null; this.pending = null; this._nearFired = false; this._autoIdx = -2;
     // Ganancia por canción: permite fundido de salida y transición suave sin tocar los faders de las pistas
     const outMain = ctx.createGain(), outMon = ctx.createGain();
     outMain.connect(this.mainBus); outMon.connect(this.monitorBus);
@@ -301,6 +317,7 @@ export class Engine extends EventTarget {
 
   unload() {
     if (!this.ctx) return;
+    this._cancelCountIn();
     this._cancelFade();
     this._cancelPendingHard();
     if (this.voice) { this._killVoice(this.voice, this.ctx.currentTime, 0.01); this.voice = null; }
@@ -318,7 +335,7 @@ export class Engine extends EventTarget {
     const now = this.ctx.currentTime;
     for (const t of this.tracks) {
       const m = t.meta;
-      const audible = !m.mute && (!anySolo || m.solo);
+      const audible = !m.mute && !t.autoMute && (!anySolo || m.solo);
       const g = audible ? clamp(m.vol ?? 1, 0, 1.5) : 0;
       if (immediate) t.gain.gain.setValueAtTime(g, now);
       else t.gain.gain.setTargetAtTime(g, now, 0.012);
@@ -451,7 +468,8 @@ export class Engine extends EventTarget {
 
   // ───────────────────────── transporte ─────────────────────────
 
-  async play() {
+  /** opts.countIn: tiempos de cuenta previa (por el monitor, y por la sala si opts.countInMain) a opts.bpm antes de arrancar. */
+  async play(opts = {}) {
     await this.init();
     if (!this.song || this.playing) return;
     const ctx = this.ctx;
@@ -460,16 +478,50 @@ export class Engine extends EventTarget {
     let pos = this.pausedPos;
     if (pos >= this.song.duration - 0.05) pos = 0;
     if (this.loop && pos >= this.loop.end) { this.loop = null; this._emit('loop'); }
-    const when = ctx.currentTime + 0.05;
+    const now = ctx.currentTime;
+    let when = now + 0.05, A = when + this.latency;
+    const beats = Math.round(opts.countIn || 0);
+    if (beats > 0 && opts.bpm > 0) {
+      const beat = 60 / (opts.bpm * this.rate), t0 = now + 0.12;
+      A = t0 + beats * beat; when = A - this.latency;
+      this._countIn(t0, beat, beats, !!opts.countInMain);
+      this._emit('countin', { beats, beat, at: t0 });
+    }
     this.voice = this._makeVoice(pos, when);
-    this._fadeIn(this.voice, when + this.latency);
-    this.anchor = { ctxTime: when + this.latency, pos };
+    this._fadeIn(this.voice, A);
+    this.anchor = { ctxTime: A, pos };
+    this._autoIdx = -2;
     this.playing = true;
     this._emit('state');
   }
 
+  _countIn(t0, beat, beats, toMain) {
+    const ctx = this.ctx;
+    this._cancelCountIn();
+    const out = ctx.createGain(); out.gain.value = 0.7;
+    out.connect(this.monitorBus); if (toMain) out.connect(this.mainBus);
+    const oscs = [];
+    for (let i = 0; i < beats; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain(), t = t0 + i * beat;
+      o.frequency.value = i % 4 === 0 ? 2400 : 1600;
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(1, t + 0.002); g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+      o.connect(g); g.connect(out); o.start(t); o.stop(t + 0.06);
+      oscs.push(o);
+    }
+    this._count = { out, oscs };
+  }
+
+  _cancelCountIn() {
+    const c = this._count; if (!c) return;
+    this._count = null;
+    const now = this.ctx.currentTime;
+    for (const o of c.oscs) { try { o.stop(now); } catch { /* ya sonó */ } }
+    setTimeout(() => { try { c.out.disconnect(); } catch { /* noop */ } }, 300);
+  }
+
   pause() {
     if (!this.playing) return;
+    this._cancelCountIn();
     if (this.fading) { clearTimeout(this._fadeTimer); this.fading = null; this._resetSongOut(); this._emit('fade', { on: false, done: false }); }
     const pos = this.getPosition();
     this._cancelPendingHard();
@@ -658,9 +710,21 @@ export class Engine extends EventTarget {
     this._emit('pending');
   }
 
+  /** Silencia las pistas que la sección marca (sec.mute = [ids]) y avisa el cambio de sección (sec.pad lo atiende la interfaz). */
+  _applyAuto(idx) {
+    const sec = idx >= 0 ? this.song.sections[idx] : null;
+    const mute = sec && Array.isArray(sec.mute) ? sec.mute : [];
+    for (const t of this.tracks) t.autoMute = mute.includes(t.meta.id);
+    this.refreshMix();
+    this._emit('section', { index: idx });
+  }
+
   _tick() {
     if (!this.ctx || !this.song) return;
     this._commitPendingIfDue();
+    const posNow = this.playing ? this._posAt(this.ctx.currentTime) : this.pausedPos;
+    const sIdx = this.sectionIndexAt(posNow);
+    if (sIdx !== this._autoIdx) { this._autoIdx = sIdx; this._applyAuto(sIdx); }
     if (this.playing && !this.pending) {
       const pos = this._posAt(this.ctx.currentTime);
       if (this.nearEndSec > 0 && !this._nearFired && !this.loop && pos >= this.song.duration - this.nearEndSec) {

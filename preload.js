@@ -9,6 +9,13 @@ contextBridge.exposeInMainWorld('yren', {
   ...testHooks,
   askMic: () => ipcRenderer.invoke('yren:ask-mic'),
   onDownload: (cb) => ipcRenderer.once('yren:download', (_e, r) => cb(r)),
+  remote: {
+    start: (o) => ipcRenderer.invoke('yren:remote-start', o),
+    stop: () => ipcRenderer.invoke('yren:remote-stop'),
+    setPin: (pin) => ipcRenderer.invoke('yren:remote-pin', pin),
+    push: (st) => ipcRenderer.send('yren:remote-push', st),
+    onCommand: (cb) => ipcRenderer.on('yren:remote-cmd', (_e, msg) => cb(msg)),
+  },
   setPlaying: (v) => ipcRenderer.send('yren:playing', !!v),
   platform: process.platform,
 });

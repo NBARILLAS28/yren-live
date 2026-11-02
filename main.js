@@ -1,4 +1,5 @@
 // YREN LIVE — proceso principal de Electron
+const { RemoteServer } = require('./remote-server');
 const { app, BrowserWindow, Menu, protocol, session, systemPreferences, ipcMain, powerSaveBlocker, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -98,9 +99,13 @@ app.whenReady().then(() => {
     }
   });
 
-  // Único permiso que se concede: "media" (solo para leer los nombres de las salidas de audio).
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media'));
-  session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media');
+  // Permisos que se conceden (la app solo carga contenido propio, yren://app): nombres de las salidas de audio (media),
+  // elegir la salida de audio (speaker-selection: sin esto setSinkId puede fallar con la interfaz USB), MIDI para el pedal
+  // y almacenamiento persistente para que la biblioteca no se borre sola. MIDI se pide siempre sin «sysex» desde la interfaz.
+  const GRANTED = new Set(['media', 'speaker-selection', 'midi', 'midiSysex', 'persistent-storage']);
+  const allowed = (permission) => GRANTED.has(permission);
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowed(permission)));
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowed(permission));
 
   // Descargas (respaldo): se avisa a la interfaz si se guardó o se canceló, para no dar por hecho un respaldo que no existe.
   session.defaultSession.on('will-download', (_e, item) => {
@@ -111,6 +116,25 @@ app.whenReady().then(() => {
   });
 
   ipcMain.on('yren:playing', (_e, v) => { isPlaying = !!v; });
+
+  // Control remoto por la red local (solo cuando el usuario lo enciende)
+  let remote = null;
+  const getRemote = () => remote || (remote = new RemoteServer({
+    pagePath: path.join(__dirname, 'src', 'remote', 'remote.html'),
+    onCommand: (cmd, arg) => { if (win && !win.isDestroyed()) win.webContents.send('yren:remote-cmd', { cmd, arg }); },
+  }));
+  ipcMain.handle('yren:remote-start', async (_e, o) => {
+    try {
+      const r = await getRemote().start({ port: o && o.port !== undefined ? o.port : 8787, pin: o && o.pin });
+      const QRCode = require('qrcode');
+      const qr = await Promise.all(r.urls.map((u) => QRCode.toDataURL(u, { margin: 1, width: 220 })));
+      return { ok: true, port: r.port, urls: r.urls, qr };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('yren:remote-stop', () => { if (remote) remote.stop(); return true; });
+  ipcMain.handle('yren:remote-pin', (_e, pin) => { if (remote && remote.running && /^\d{4,8}$/.test(String(pin))) remote.setPin(pin); return true; });
+  ipcMain.on('yren:remote-push', (_e, st) => { if (remote && remote.running) remote.push(st); });
+  app.on('will-quit', () => { if (remote) remote.stop(); });
   if (process.env.YREN_TEST) { // ganchos solo para pruebas automáticas
     ipcMain.handle('yren:test-answer', (_e, a) => { process.env.YREN_TEST_ANSWER = a; return true; });
     ipcMain.handle('yren:test-close', () => { if (win) win.close(); return !!(win && !win.isDestroyed()); });

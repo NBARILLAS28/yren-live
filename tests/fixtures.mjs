@@ -26,3 +26,16 @@ export function makeSong(title = 'Cancion de prueba', secs = 24) {
   for (const [name, fn] of Object.entries(defs)) { const f = path.join(dir, `${title} - ${name}.wav`); writeWav(f, fn, secs); files.push(f); }
   return { dir, files };
 }
+
+/** Añade puntos «cue» con nombre (en segundos) a un WAV ya escrito. */
+export function addWavCues(file, cues, sr = 22050) {
+  const buf = fs.readFileSync(file);
+  const cue = Buffer.alloc(4 + cues.length * 24); cue.writeUInt32LE(cues.length, 0);
+  cues.forEach((c, i) => { const o = 4 + i * 24, smp = Math.round(c.t * sr); cue.writeUInt32LE(i + 1, o); cue.writeUInt32LE(smp, o + 4); cue.write('data', o + 8); cue.writeUInt32LE(smp, o + 20); });
+  const labs = cues.map((c, i) => { const t = Buffer.from(c.name + '\0'); const pad = t.length & 1; const b = Buffer.alloc(12 + t.length + pad); b.write('labl', 0); b.writeUInt32LE(4 + t.length, 4); b.writeUInt32LE(i + 1, 8); t.copy(b, 12); return b; });
+  const chunk = (id, b) => { const h = Buffer.alloc(8); h.write(id, 0); h.writeUInt32LE(b.length, 4); return Buffer.concat([h, b, b.length & 1 ? Buffer.alloc(1) : Buffer.alloc(0)]); };
+  const extra = Buffer.concat([chunk('cue ', cue), chunk('LIST', Buffer.concat([Buffer.from('adtl'), ...labs]))]);
+  const out = Buffer.concat([buf, extra]);
+  out.writeUInt32LE(out.length - 8, 4);
+  fs.writeFileSync(file, out);
+}

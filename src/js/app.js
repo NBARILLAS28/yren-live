@@ -3,6 +3,9 @@ import { Engine } from './engine.js';
 import { store, requestPersistence } from './store.js';
 import * as U from './util.js';
 import * as Backup from './backup.js';
+import * as Lyr from './lyrics.js';
+import * as Markers from './markers.js';
+import { Midi, ACTIONS, describeKey } from './midi.js';
 
 const $ = (id) => document.getElementById(id);
 const engine = new Engine();
@@ -23,11 +26,12 @@ const state = {
     deviceId: 'default', mode: 'pairs', mainPair: 0, monitorPair: 1,
     jumpMode: 'end', autoNext: false, padMon: true, padFollow: true, padVol: 55, padRoot: 0,
     mainVol: 100, monVol: 100, live: false, deviceLabel: '',
-    fadeSec: 4, crossSec: 0, memBudgetMB: 1500, lastBackup: 0, backupSnooze: 0,
+    fadeSec: 4, crossSec: 0, stageFont: 30, countIn: 0, countInMain: false, remoteOn: false, remotePin: '', remotePort: 8787, midiMap: {}, memBudgetMB: 1500, lastBackup: 0, backupSnooze: 0,
   },
   outLost: false,
   inflight: new Map(), // songId → promesa de decodificación en curso
   crossing: false,
+  remote: { on: false },
   preloadRun: 0,
 };
 
@@ -148,9 +152,12 @@ async function importFiles(fileList, titleHint) {
     showLoading('Dibujando la onda…');
     await new Promise((r) => setTimeout(r, 20));
     const duration = Math.max(...tracks.map((t) => buffers.get(t.id).duration));
+    let cueSections = [];
+    for (const f of files) { cueSections = await Markers.readWavCues(f); if (cueSections.length) break; }
+    cueSections = cueSections.filter((m) => m.start < duration - 0.5);
     const song = {
       id: songId, title: titleHint || U.commonTitle(files.map((f) => f.name)), artist: '',
-      key: { root: 0, minor: false }, bpm: 120, duration, sections: [], tracks,
+      key: { root: 0, minor: false }, bpm: 120, duration, sections: cueSections.map((m) => ({ id: U.uid(), name: m.name, start: m.start })), tracks,
       peaks: computePeaks(tracks, buffers), created: Date.now(),
     };
     state.songs.set(song.id, song);
@@ -163,7 +170,7 @@ async function importFiles(fileList, titleHint) {
     showLoading(null);
     renderSetlistSelect(); renderSongList();
     await selectItem(sl.items.length - 1);
-    toast(`“${song.title}” lista · ${tracks.length} pistas`);
+    toast(`“${song.title}” lista · ${tracks.length} pistas${cueSections.length ? ` · ${cueSections.length} secciones tomadas de los marcadores del archivo` : ''}`);
     openEdit(true);
   } catch (e) {
     console.error(e);
@@ -220,6 +227,9 @@ async function getBuffers(song, onProgress) {
   if (running) { try { await running; } catch { /* se reintenta abajo */ } }
   let bufs = state.cache.get(song.id);
   if (!bufs) { bufs = new Map(); state.cache.set(song.id, bufs); }
+  for (const t of song.tracks) {
+    if (t.generated && !bufs.has(t.id)) { await engine.init(); bufs.set(t.id, Engine.makeClickBuffer(engine.ctx, song.duration, song.bpm, song.clickOffset || 0, song.clickBeats || 4)); }
+  }
   const todo = song.tracks.filter((t) => !bufs.has(t.id));
   if (!todo.length) return bufs;
   let next = 0, done = 0;
@@ -504,6 +514,7 @@ function renderNow() {
   $('nowTitle').textContent = song.title;
   $('nowArtist').textContent = (song.artist || 'Sin artista') + ` · ${song.tracks.length} pistas`;
   $('timeTotal').textContent = U.fmtTime(song.duration);
+  refreshStage();
   void item;
 }
 
@@ -536,6 +547,7 @@ function updateKeyTempoUI() {
   $('bpmVal').textContent = bpm;
   $('chipBpm').textContent = Math.round(bpm);
   renderSongList();
+  refreshStage();
 }
 
 function setSemis(n) {
@@ -652,7 +664,8 @@ function refreshStripStates() {
     el.querySelector('.mute').classList.toggle('on', !!t.mute);
     el.querySelector('.tr').classList.toggle('on', !!t.transpose);
     el.querySelectorAll('.route button').forEach((b) => b.classList.toggle('on', b.dataset.r === t.route));
-    el.classList.toggle('dim', t.mute || (anySolo && !t.solo));
+    const et = engine.tracks.find((x) => x.meta.id === t.id);
+    el.classList.toggle('dim', t.mute || !!(et && et.autoMute) || (anySolo && !t.solo));
   });
 }
 
@@ -731,6 +744,62 @@ async function addSectionHere() {
   renderSections(); dirtyWave = true;
 }
 
+// ───────────────────────── vista de escenario ─────────────────────────
+const stage = { open: false, sec: -2, blocks: [], lastKey: '' };
+
+function openStage() { stage.open = true; $('stageView').hidden = false; refreshStage(true); }
+function closeStage() { stage.open = false; $('stageView').hidden = true; }
+
+/** Vuelve a dibujar título, tono, letra y notas (cambia la canción, el tono o la letra). */
+function refreshStage(force = false) {
+  if (!stage.open) return;
+  const song = currentSong(), item = currentItem();
+  $('svTitle').textContent = song ? song.title : 'Sin canción';
+  $('svArtist').textContent = song ? (song.artist || '') : '';
+  const semis = item ? item.transpose || 0 : 0;
+  const key = song ? U.shiftKey(song.key, semis) : null;
+  $('svKey').textContent = key ? U.keyLabel(key) : '—';
+  $('svBpm').textContent = song && item ? Math.round(song.bpm * (item.tempo || 100) / 100) : '—';
+  const keyId = song ? `${song.id}|${semis}|${(song.lyrics || '').length}|${song.notes || ''}` : '';
+  if (force || keyId !== stage.lastKey) {
+    stage.lastKey = keyId;
+    $('svLyrics').innerHTML = song && song.lyrics ? Lyr.renderLyrics(song.lyrics, { semis, flats: Lyr.prefersFlats(key) }) : '';
+    stage.blocks = [...$('svLyrics').querySelectorAll('.lyr-block[data-h]')];
+    $('svNotes').hidden = !(song && song.notes && song.notes.trim());
+    $('svNotes').textContent = song && song.notes ? song.notes : '';
+    stage.sec = -2;
+  }
+  document.documentElement.style.setProperty('--lyr', state.settings.stageFont + 'px');
+}
+
+/** Cada cuadro: sección actual y siguiente, cuenta atrás, barra y desplazamiento de la letra. */
+function updateStage(pos) {
+  const song = currentSong();
+  if (!song) return;
+  const dur = song.duration || 1;
+  $('svClock').textContent = U.fmtTime(pos).replace(/\.\d$/, '') + ' / ' + U.fmtTime(dur).replace(/\.\d$/, '');
+  $('svBar').style.width = (pos / dur) * 100 + '%';
+  $('svPlay').textContent = engine.playing ? '⏸' : '▶';
+  const cur = engine.sectionIndexAt(pos), pend = engine.getPending();
+  $('svSec').textContent = cur >= 0 ? song.sections[cur].name : (song.sections.length ? 'Intro' : '—');
+  let next = '';
+  if (pend && song.sections[pend.target]) next = `Salto a ${song.sections[pend.target].name}`;
+  else if (cur + 1 < song.sections.length) {
+    const secs = Math.max(0, (song.sections[cur + 1].start - pos) / engine.rate);
+    next = `Sigue: ${song.sections[cur + 1].name} · en ${Math.ceil(secs)} s`;
+  }
+  if ($('svNext').textContent !== next) $('svNext').textContent = next;
+  if (cur !== stage.sec) {
+    stage.sec = cur;
+    const name = cur >= 0 ? Lyr.normHead(song.sections[cur].name) : '';
+    let hit = name ? stage.blocks.find((b) => b.dataset.h && b.dataset.h === name) : null;
+    const heads = stage.blocks.filter((b) => b.dataset.h);
+    if (!hit && cur >= 0 && heads.length === song.sections.length) hit = heads[cur]; // mismo número de partes: se corresponden en orden
+    stage.blocks.forEach((b) => b.classList.toggle('here', b === hit));
+    if (hit) $('svLyrics').scrollTo({ top: Math.max(0, hit.offsetTop - 70), behavior: 'smooth' });
+  }
+}
+
 // ───────────────────────── onda ─────────────────────────
 const canvas = $('wave');
 const g2 = canvas.getContext('2d');
@@ -801,6 +870,7 @@ function frame(ts) {
   if (cur !== lastCur) { $('timeCur').textContent = cur; lastCur = cur; }
   if (dirtyWave || pos !== lastDrawPos) { drawWave(pos); lastDrawPos = pos; dirtyWave = false; }
   if (song) updateSectionChips();
+  if (stage.open) updateStage(pos);
   if (ts - lastMeter > 33) { updateMeters(); lastMeter = ts; }
   requestAnimationFrame(frame);
 }
@@ -881,10 +951,13 @@ function openEdit(isNew = false) {
   editState = {
     song,
     title: song.title, artist: song.artist || '', key: { ...song.key }, bpm: song.bpm,
-    tracks: song.tracks.map((t) => ({ ...t })),
-    sections: song.sections.map((s) => ({ ...s })),
+    tracks: song.tracks.filter((t) => !t.generated).map((t) => ({ ...t })),
+    sections: song.sections.map((s) => ({ ...s, mute: s.mute ? [...s.mute] : undefined })),
     removed: [], added: false,
   };
+  $('edGenClick').checked = song.tracks.some((t) => t.generated);
+  $('edClickBeats').value = String(song.clickBeats || 4);
+  $('edClickOffset').value = song.clickOffset || 0;
   $('edTitle').value = song.title;
   $('edArtist').value = song.artist || '';
   const rootSel = $('edKeyRoot');
@@ -894,6 +967,7 @@ function openEdit(isNew = false) {
   $('edKeyMinor').checked = !!song.key.minor;
   $('edBpm').value = song.bpm;
   $('edDur').value = U.fmtTime(song.duration);
+  $('edLyrics').value = song.lyrics || ''; $('edNotes').value = song.notes || '';
   renderEditTracks(); renderEditSections();
   $('dlgEdit').showModal();
   if (isNew) $('edTitle').select();
@@ -950,11 +1024,30 @@ function renderEditSections() {
   editState.sections.forEach((s, i) => {
     const row = document.createElement('div');
     row.className = 'sec-row';
-    row.innerHTML = '<input type="text" class="sn"><input type="text" class="st"><button type="button" class="mini" title="Quitar">✕</button>';
+    row.innerHTML = '<input type="text" class="sn"><input type="text" class="st"><button type="button" class="mini au" title="Automatización de esta sección: silenciar pistas o encender/apagar el pad">⚙</button><button type="button" class="mini rm" title="Quitar">✕</button>';
+    const au = row.querySelector('.au');
+    const panel = document.createElement('div');
+    panel.className = 'sec-auto'; panel.hidden = true;
+    const lbl = document.createElement('span'); lbl.className = 'lbl2'; lbl.textContent = 'Silenciar aquí:'; panel.appendChild(lbl);
+    for (const t of editState.tracks) {
+      const l = document.createElement('label'); l.className = 'check';
+      const c = document.createElement('input'); c.type = 'checkbox'; c.checked = !!(s.mute && s.mute.includes(t.id));
+      c.addEventListener('change', () => { s.mute = (s.mute || []).filter((x) => x !== t.id); if (c.checked) s.mute.push(t.id); if (!s.mute.length) delete s.mute; markAuto(); });
+      l.appendChild(c); l.appendChild(document.createTextNode(' ' + t.name)); panel.appendChild(l);
+    }
+    const ps = document.createElement('select');
+    ps.innerHTML = '<option value="">Pad: sin cambio</option><option value="on">Pad: encender</option><option value="off">Pad: apagar</option>';
+    ps.value = s.pad || '';
+    ps.addEventListener('change', () => { if (ps.value) s.pad = ps.value; else delete s.pad; markAuto(); });
+    panel.appendChild(ps);
+    const markAuto = () => au.classList.toggle('has', !!((s.mute && s.mute.length) || s.pad));
+    markAuto();
+    au.addEventListener('click', () => { panel.hidden = !panel.hidden; });
     const n = row.querySelector('.sn'); n.value = s.name; n.addEventListener('input', () => (s.name = n.value));
     const t = row.querySelector('.st'); t.value = fmtEditTime(s.start);
     t.addEventListener('change', () => { const v = parseTime(t.value); if (isFinite(v)) s.start = U.clamp(v, 0, editState.song.duration); t.value = fmtEditTime(s.start); });
-    row.querySelector('.mini').addEventListener('click', () => { editState.sections.splice(i, 1); renderEditSections(); });
+    row.querySelector('.rm').addEventListener('click', () => { editState.sections.splice(i, 1); renderEditSections(); });
+    row.appendChild(panel);
     box.appendChild(row);
   });
 }
@@ -965,12 +1058,25 @@ async function applyEdit() {
   song.artist = $('edArtist').value.trim();
   song.key = { root: +$('edKeyRoot').value, minor: $('edKeyMinor').checked };
   song.bpm = U.clamp(+$('edBpm').value || song.bpm, 30, 260);
+  song.lyrics = $('edLyrics').value; song.notes = $('edNotes').value;
   // pistas: nombres, tipo, salida, transponer
   for (const t of es.tracks) {
     const real = song.tracks.find((x) => x.id === t.id);
     if (real) Object.assign(real, { name: t.name, kind: t.kind, route: t.route, transpose: t.transpose });
   }
   let reload = false;
+  const hadGen = song.tracks.find((t) => t.generated);
+  const wantGen = $('edGenClick').checked;
+  const beats = +$('edClickBeats').value || 4, offs = Math.max(0, +$('edClickOffset').value || 0);
+  const clickChanged = wantGen !== !!hadGen || (wantGen && (beats !== (song.clickBeats || 4) || offs !== (song.clickOffset || 0) || song.bpm !== es.bpm));
+  song.clickBeats = beats; song.clickOffset = offs;
+  if (clickChanged) {
+    const bufs0 = state.cache.get(song.id);
+    if (hadGen && bufs0) bufs0.delete(hadGen.id);
+    if (!wantGen && hadGen) song.tracks = song.tracks.filter((t) => !t.generated);
+    if (wantGen && !hadGen) song.tracks.push({ id: 'gen-click-' + U.uid(), name: 'Click (generado)', kind: 'click', route: 'monitor', transpose: false, generated: true, vol: 1, mute: false, solo: false });
+    reload = true;
+  }
   if (es.removed.length) {
     song.tracks = song.tracks.filter((t) => !es.removed.includes(t.id));
     for (const id of es.removed) { await store.del('files', store.fileKey(song.id, id)); const b = state.cache.get(song.id); if (b) b.delete(id); }
@@ -1028,6 +1134,131 @@ function openLibrary() {
   }
   updateBackupInfo();
   $('dlgLibrary').showModal();
+}
+
+// ───────────────────────── comandos (pedal MIDI y control remoto) ─────────────────────────
+/** Un único punto de entrada para todo lo que llega de fuera de la pantalla: pedal MIDI y celular. */
+function runCommand(cmd, arg) {
+  const item = currentItem();
+  switch (cmd) {
+    case 'toggle': return togglePlay();
+    case 'stop': return engine.stop();
+    case 'next': return stepSong(1);
+    case 'prev': return stepSong(-1);
+    case 'nextSec': return stepSection(1);
+    case 'prevSec': return stepSection(-1);
+    case 'section': return Number.isInteger(arg) && onSectionClick(arg);
+    case 'keyUp': return item && setSemis((item.transpose || 0) + 1);
+    case 'keyDown': return item && setSemis((item.transpose || 0) - 1);
+    case 'keyReset': return item && setSemis(0);
+    case 'tempoUp': return item && setTempoPct((item.tempo || 100) + 1);
+    case 'tempoDown': return item && setTempoPct((item.tempo || 100) - 1);
+    case 'tempoReset': return item && setTempoPct(100);
+    case 'fade': return doFade();
+    case 'pad': return togglePad();
+    case 'loop': return toggleLoop();
+    case 'song': return Number.isInteger(arg) && !engine.playing && selectItem(arg); // no se cambia de canción a media música
+    default: return undefined;
+  }
+}
+
+// ───────────────────────── pedal / MIDI ─────────────────────────
+const midi = new Midi();
+
+function renderMidi() {
+  const box = $('midiMap');
+  if (!box) return;
+  box.innerHTML = '';
+  for (const [action, label] of ACTIONS) {
+    const name = document.createElement('div'); name.textContent = label;
+    const key = document.createElement('div'); key.className = 'k';
+    const waiting = midi.learning === action;
+    key.textContent = waiting ? 'Pisa el botón…' : (midi.keyOf(action) ? describeKey(midi.keyOf(action)) : '—');
+    key.classList.toggle('wait', waiting);
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'btn ghost sm'; b.textContent = waiting ? 'Cancelar' : 'Aprender';
+    b.addEventListener('click', async () => {
+      if (waiting) { midi.cancelLearn(); renderMidi(); return; }
+      const r = await midi.init();
+      if (!r.ok) { toast(r.error, true); return; }
+      midi.learn(action); renderMidi();
+    });
+    box.append(name, key, b);
+  }
+  const names = midi.inputNames();
+  $('midiStatus').textContent = midi.access ? (names.length ? 'Conectado: ' + names.join(', ') + '.' : 'No veo ningún dispositivo MIDI conectado.') : '';
+}
+
+async function initMidi() {
+  midi.map = state.settings.midiMap || {};
+  midi.addEventListener('action', (e) => runCommand(e.detail.action));
+  midi.addEventListener('learned', () => { state.settings.midiMap = midi.map; saveSettingsSoon(); renderMidi(); toast('Botón asignado'); });
+  midi.addEventListener('learn-timeout', () => { renderMidi(); toast('No llegó ningún botón. Inténtalo de nuevo.', true); });
+  midi.addEventListener('devices', renderMidi);
+  if (Object.keys(midi.map).length) await midi.init(); // con asignaciones guardadas se escucha desde el arranque
+}
+
+// ───────────────────────── control remoto ─────────────────────────
+const remoteApi = () => (window.yren && window.yren.remote) || null;
+let remoteTimer = null, remoteLast = '', remoteLastAt = 0;
+
+function remoteState() {
+  const song = currentSong(), item = currentItem(), sl = currentSetlist();
+  const pos = engine.getPosition(), cur = song ? engine.sectionIndexAt(pos) : -1, pend = engine.getPending();
+  const key = song ? U.shiftKey(song.key, item ? item.transpose || 0 : 0) : null;
+  return {
+    title: song ? song.title : '', artist: song ? song.artist || '' : '',
+    key: key ? U.keyLabel(key) : '', bpm: song && item ? Math.round(song.bpm * (item.tempo || 100) / 100) : 0,
+    tempo: item ? item.tempo || 100 : 100, semis: item ? item.transpose || 0 : 0,
+    playing: engine.playing, pos, dur: song ? song.duration : 0, rate: engine.rate,
+    sections: song ? song.sections.map((x) => x.name) : [], cur, pending: pend ? pend.target : -1, secName: song && cur >= 0 ? song.sections[cur].name : '',
+    padOn: state.padOn, fading: !!engine.fading, loop: !!engine.loop, idx: state.idx, live: !!state.settings.live,
+    songs: sl ? sl.items.map((it) => { const s = state.songs.get(it.songId); return { t: s ? s.title : '?', k: s ? U.keyLabel(U.shiftKey(s.key, it.transpose || 0)) : '' }; }) : [],
+  };
+}
+
+function pushRemote(force = false) {
+  const R = remoteApi();
+  if (!R || !state.remote.on) return;
+  const st = remoteState();
+  const sig = JSON.stringify({ ...st, pos: Math.round(st.pos) });
+  const now = Date.now();
+  if (!force && sig === remoteLast && now - remoteLastAt < 3000) return;
+  remoteLast = sig; remoteLastAt = now;
+  R.push(st);
+}
+
+async function setRemote(on, opts = {}) {
+  const R = remoteApi();
+  if (!R) return { ok: false, error: 'No disponible aquí' };
+  clearInterval(remoteTimer);
+  if (!on) { await R.stop(); state.remote = { on: false }; state.settings.remoteOn = false; saveSettingsSoon(); renderRemote(); return { ok: true }; }
+  const s = state.settings;
+  if (!/^\d{4,8}$/.test(s.remotePin || '')) s.remotePin = String(1000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 9000));
+  const r = await R.start({ pin: s.remotePin, port: opts.port !== undefined ? opts.port : s.remotePort });
+  if (!r.ok) { state.remote = { on: false }; s.remoteOn = false; saveSettingsSoon(); renderRemote(); toast('No se pudo activar el control remoto: ' + r.error, true); return r; }
+  state.remote = { on: true, port: r.port, urls: r.urls, qr: r.qr };
+  s.remoteOn = true; saveSettingsSoon();
+  remoteTimer = setInterval(() => pushRemote(), 500);
+  pushRemote(true); renderRemote();
+  return r;
+}
+
+function renderRemote() {
+  const R = remoteApi();
+  $('remoteBox').hidden = !R; $('remoteNA').hidden = !!R;
+  if (!R) return;
+  const on = state.remote.on;
+  $('remoteOn').checked = on;
+  $('remotePin').value = state.settings.remotePin || '';
+  const q = $('remoteQr'); q.innerHTML = '';
+  if (on && state.remote.qr && state.remote.qr[0]) { const img = document.createElement('img'); img.src = state.remote.qr[0]; img.alt = 'Código QR'; q.appendChild(img); }
+  $('remoteInfo').innerHTML = '';
+  if (on) {
+    const t = document.createElement('div');
+    t.innerHTML = 'Abre en el celular (misma red Wi-Fi) y escribe el PIN:';
+    $('remoteInfo').appendChild(t);
+    for (const u of (state.remote.urls.length ? state.remote.urls : [`http://localhost:${state.remote.port}/`])) { const d = document.createElement('div'); d.innerHTML = '<b></b>'; d.firstChild.textContent = u; $('remoteInfo').appendChild(d); }
+  } else $('remoteInfo').textContent = 'Apagado. Al activarlo verás una dirección y un código QR para abrir en el celular (debe estar en la misma red Wi-Fi). Mac puede preguntar si permite conexiones entrantes: elige «Permitir».';
 }
 
 // ───────────────────────── respaldo ─────────────────────────
@@ -1180,8 +1411,15 @@ async function useDefaultOutput() {
 /** Todo lo que arranca reproducción pasa por aquí para respetar el bloqueo de salida. */
 async function playSafe() {
   if (state.outLost) { showOutAlert('SALIDA DE AUDIO NO DISPONIBLE', 'La interfaz elegida no está conectada. Reconéctala o elige la salida del Mac para poder reproducir.'); return false; }
-  await engine.play();
+  await engine.play(countOpts());
   return true;
+}
+
+/** Cuenta previa: solo al arrancar desde el inicio de la canción. */
+function countOpts() {
+  const s = state.settings, song = currentSong(), item = currentItem();
+  if (!(s.countIn > 0) || !song || !item || engine.pausedPos > 0.4 || engine.loop) return {};
+  return { countIn: s.countIn, bpm: song.bpm * (item.tempo || 100) / 100, countInMain: s.countInMain };
 }
 
 // ───────────────────────── ajustes de audio ─────────────────────────
@@ -1207,6 +1445,7 @@ function populateSettings() {
   });
   if ([...sel.options].some((o) => o.value === state.settings.deviceId)) sel.value = state.settings.deviceId; else sel.value = 'default';
   $('modeSel').value = state.settings.mode;
+  $('countSel').value = String(state.settings.countIn); $('countMain').checked = !!state.settings.countInMain;
   $('fadeSel').value = String(state.settings.fadeSec); $('crossSel').value = String(state.settings.crossSec); $('memSel').value = String(state.settings.memBudgetMB);
   const info = engine.getInfo();
   const pairs = Math.max(1, Math.floor((info.channels || 2) / 2));
@@ -1269,6 +1508,15 @@ function wire() {
   document.addEventListener('change', (e) => { const t = e.target; if (t && (t.type === 'range' || t.tagName === 'SELECT' || t.type === 'checkbox') && !t.closest('dialog')) t.blur(); });
 
   $('btnPlay').addEventListener('click', togglePlay);
+  $('btnStage').addEventListener('click', () => (stage.open ? closeStage() : openStage()));
+  $('svClose').addEventListener('click', closeStage);
+  $('svPlay').addEventListener('click', togglePlay);
+  $('svPrevSec').addEventListener('click', () => stepSection(-1));
+  $('svNextSec').addEventListener('click', () => stepSection(1));
+  $('svFade').addEventListener('click', doFade);
+  const fontStep = (d) => { state.settings.stageFont = U.clamp(state.settings.stageFont + d, 18, 64); saveSettingsSoon(); refreshStage(); };
+  $('svFontDown').addEventListener('click', () => fontStep(-3));
+  $('svFontUp').addEventListener('click', () => fontStep(3));
   $('btnStop').addEventListener('click', () => engine.stop());
   $('btnPrev').addEventListener('click', () => { if (engine.getPosition() > 3) engine.seek(0); else stepSong(-1); });
   $('btnNext').addEventListener('click', () => stepSong(1));
@@ -1372,6 +1620,20 @@ function wire() {
     renderEditSections();
     toast('Plantilla creada con tiempos repartidos: ajusta cada tiempo o vuelve a marcarlos con la canción sonando');
   });
+  $('edImportMarkers').addEventListener('click', () => { $('markersInput').value = ''; $('markersInput').click(); });
+  $('markersInput').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if (!f || !editState) return;
+    const dur = editState.song.duration;
+    let found = [];
+    try { found = await Markers.readMarkersFromFile(f); } catch { /* se avisa abajo */ }
+    const inRange = found.filter((m) => m.start <= dur + 0.5).map((m) => ({ ...m, start: Math.min(m.start, dur) }));
+    if (!inRange.length) { toast(`No encontré marcadores en “${f.name}”. Acepto WAV con cue points, o texto/CSV de Audacity, Reaper o líneas como «0:45 Coro».`, true); return; }
+    if (editState.sections.length && !(await askConfirm('Importar marcadores', `Se reemplazarán las ${editState.sections.length} secciones actuales por ${inRange.length} del archivo.`, 'Reemplazar'))) return;
+    editState.sections = inRange.map((m) => ({ id: U.uid(), name: m.name, start: m.start }));
+    renderEditSections();
+    toast(`${inRange.length} secciones importadas${found.length > inRange.length ? ` (${found.length - inRange.length} fuera de la duración se omitieron)` : ''}`);
+  });
   $('edDelete').addEventListener('click', deleteSongFromLibrary);
   $('edRemoveFromSetlist').addEventListener('click', () => { $('dlgEdit').close('cancel'); moveItem(state.idx, 'del'); });
   const stemsInput = document.createElement('input');
@@ -1383,18 +1645,35 @@ function wire() {
     const keep = { tracks: editState.tracks.map((t) => ({ ...t })), sections: editState.sections.map((s) => ({ ...s })), removed: [...editState.removed] };
     try {
       const ok = await addStemsToSong(editState.song, e.target.files);
-      if (ok) { editState.added = true; editState.tracks = editState.song.tracks.map((t) => keep.tracks.find((k) => k.id === t.id) || { ...t }); editState.sections = keep.sections; editState.removed = keep.removed; $('edDur').value = U.fmtTime(editState.song.duration); renderEditTracks(); renderEditSections(); }
+      if (ok) { editState.added = true; editState.tracks = editState.song.tracks.filter((t) => !t.generated).map((t) => keep.tracks.find((k) => k.id === t.id) || { ...t }); editState.sections = keep.sections; editState.removed = keep.removed; $('edDur').value = U.fmtTime(editState.song.duration); renderEditTracks(); renderEditSections(); }
     } catch (err) { toast('No se pudieron agregar las pistas: ' + err.message, true); }
   });
 
   // ajustes de audio / biblioteca
-  $('btnSettings').addEventListener('click', async () => { await engine.init().catch(() => {}); await refreshDevices(); populateSettings(); $('dlgSettings').showModal(); });
+  $('btnSettings').addEventListener('click', async () => { await engine.init().catch(() => {}); await refreshDevices(); populateSettings(); renderRemote(); renderMidi(); $('dlgSettings').showModal(); });
   $('btnLibrary').addEventListener('click', openLibrary);
   $('btnBackup').addEventListener('click', doBackup);
   $('btnRestore').addEventListener('click', () => { $('packInput').value = ''; $('packInput').click(); });
   $('packInput').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) { $('dlgLibrary').close('cancel'); restoreFromFile(f); } });
   $('backupNow').addEventListener('click', () => { $('backupBanner').hidden = true; doBackup(); });
   $('backupLater').addEventListener('click', () => { state.settings.backupSnooze = Date.now() + 3 * DAY; saveSettingsSoon(); $('backupBanner').hidden = true; });
+  $('remoteOn').addEventListener('change', (e) => setRemote(e.target.checked));
+  $('remoteNewPin').addEventListener('click', async () => {
+    state.settings.remotePin = String(1000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 9000));
+    saveSettingsSoon();
+    if (state.remote.on && remoteApi()) await remoteApi().setPin(state.settings.remotePin);
+    renderRemote(); toast('PIN nuevo. Los celulares conectados deberán escribirlo otra vez.');
+  });
+  $('remotePin').addEventListener('change', async (e) => {
+    const v = e.target.value.trim();
+    if (!/^\d{4,8}$/.test(v)) { toast('El PIN debe tener entre 4 y 8 dígitos', true); e.target.value = state.settings.remotePin || ''; return; }
+    state.settings.remotePin = v; saveSettingsSoon();
+    if (state.remote.on && remoteApi()) await remoteApi().setPin(v);
+    toast('PIN guardado');
+  });
+  $('midiClear').addEventListener('click', () => { midi.map = {}; state.settings.midiMap = {}; saveSettingsSoon(); renderMidi(); });
+  $('countSel').addEventListener('change', (e) => { state.settings.countIn = +e.target.value; saveSettingsSoon(); });
+  $('countMain').addEventListener('change', (e) => { state.settings.countInMain = e.target.checked; saveSettingsSoon(); });
   $('fadeSel').addEventListener('change', (e) => { state.settings.fadeSec = +e.target.value; saveSettingsSoon(); });
   $('crossSel').addEventListener('change', (e) => { state.settings.crossSec = +e.target.value; applyTransitions(); saveSettingsSoon(); });
   $('memSel').addEventListener('change', (e) => { state.settings.memBudgetMB = +e.target.value; saveSettingsSoon(); preloadSetlist(); });
@@ -1432,6 +1711,8 @@ function wire() {
       if (e.shiftKey) setTempoPct((it.tempo || 100) + d); else setSemis((it.transpose || 0) + d);
     }
     else if (e.code === 'KeyP') togglePad();
+    else if (e.code === 'KeyS') (stage.open ? closeStage() : openStage());
+    else if (e.code === 'Escape' && stage.open) closeStage();
     else if (e.code === 'KeyF') doFade();
     else if (e.code === 'PageDown') stepSong(1);
     else if (e.code === 'PageUp') stepSong(-1);
@@ -1467,6 +1748,19 @@ function wire() {
     $('btnFade').classList.toggle('on', !!e.detail.on);
     $('btnFade').textContent = e.detail.on ? '↘ Fundiendo…' : '↘ Fundido';
     if (e.detail.done) toast('Fundido completo');
+  });
+  engine.addEventListener('countin', (e) => {
+    const { beats, beat } = e.detail, badge = $('countBadge');
+    const delay = Math.max(0, (e.detail.at - engine.ctx.currentTime) * 1000);
+    for (let i = 0; i < beats; i++) setTimeout(() => { if (!engine.playing) return; badge.textContent = String((i % 4) + 1); badge.hidden = false; }, delay + i * beat * 1000);
+    setTimeout(() => { badge.hidden = true; }, delay + beats * beat * 1000 - 30);
+  });
+  engine.addEventListener('state', () => { if (!engine.playing) $('countBadge').hidden = true; });
+  engine.addEventListener('section', (e) => {
+    refreshStripStates();
+    const song = currentSong(), sec = song && song.sections[e.detail.index];
+    if (!engine.playing || !sec || !sec.pad) return;
+    if ((sec.pad === 'on') !== state.padOn) togglePad();
   });
   engine.addEventListener('nearend', async () => {
     const cross = state.settings.crossSec, sl = currentSetlist();
@@ -1530,10 +1824,13 @@ async function boot() {
   const sl = currentSetlist();
   if (sl && sl.items.length) await selectItem(0);
   checkBackupReminder();
+  initMidi();
+  const R = remoteApi();
+  if (R) { R.onCommand((m) => { try { runCommand(m.cmd, m.arg); } catch (e) { console.warn('remoto', e); } setTimeout(() => pushRemote(true), 60); }); if (state.settings.remoteOn) setRemote(true); }
 }
 
 window.__yren.state = state;
-window.__yren.api = { selectItem, reorderItem, duplicateSetlist, doFade, doBackup, restoreFromFile, preloadSetlist, planPreload, cacheBytes, songLoaded, checkBackupReminder, backupDue, buildPack: () => Backup.buildPack(U.APP_VERSION) };
+window.__yren.api = { setRemote, remoteState, runCommand, midi, midiMessage: (d) => midi.handle(d), countOpts, openStage, closeStage, stageInfo: () => ({ ...stage, blocks: stage.blocks.length }), selectItem, reorderItem, duplicateSetlist, doFade, doBackup, restoreFromFile, preloadSetlist, planPreload, cacheBytes, songLoaded, checkBackupReminder, backupDue, buildPack: () => Backup.buildPack(U.APP_VERSION) };
 window.__yren.outputLost = outputLost;
 window.__yren.outputRestored = outputRestored;
 window.__yren.playSafe = playSafe;

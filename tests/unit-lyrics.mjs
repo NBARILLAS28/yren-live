@@ -1,0 +1,25 @@
+// Pruebas de la transposición de acordes y del formato de letras (sin navegador).
+import * as L from '../src/js/lyrics.js';
+let total = 0, failed = 0;
+const eq = (name, got, want) => { total++; const ok = JSON.stringify(got) === JSON.stringify(want); if (!ok) failed++; console.log((ok ? '  ✔ ' : '  ✘ ') + name + (ok ? '' : ` — obtuvo ${JSON.stringify(got)}, esperado ${JSON.stringify(want)}`)); };
+console.log('\nLetras y acordes');
+eq('C +2 = D', L.transposeChord('C', 2), 'D');
+eq('F#m7 +1 = Gm7', L.transposeChord('F#m7', 1), 'Gm7');
+eq('Bb/D +2 = C/E (bajo incluido)', L.transposeChord('Bb/D', 2), 'C/E');
+eq('G −4 con bemoles = Eb; con sostenidos = D#', [L.transposeChord('G', -4, true), L.transposeChord('G', -4, false)], ['Eb', 'D#']);
+eq('Cmaj7, Dsus4, Em7b5, Gadd9 se reconocen', ['Cmaj7', 'Dsus4', 'Em7b5', 'Gadd9'].map((c) => L.transposeChord(c, 2)), ['Dmaj7', 'Esus4', 'F#m7b5', 'Aadd9']);
+eq('Notación latina: Lam +2 = Sim; Sol7 +5 = Do7; Do/Mi +2 = Re/Fa#', [L.transposeChord('Lam', 2), L.transposeChord('Sol7', 5), L.transposeChord('Do/Mi', 2)], ['Sim', 'Do7', 'Re/Fa#']);
+eq('Latina con bemoles: Mi +1 = Fa; Si +1 con bemoles = Do; Re −2 con bemoles = Do', [L.transposeChord('Mi', 1, true), L.transposeChord('Si', 1, true), L.transposeChord('Re', -2, true)], ['Fa', 'Do', 'Do']);
+eq('Latina en mayúsculas se conserva: SOL +2 = LA', L.transposeChord('SOL', 2), 'LA');
+eq('Palabras que no son acordes → null', ['Hola', 'Amor', 'Gracias', 'x', 'H', 'Dios'].map((w) => L.transposeChord(w, 2)), [null, null, null, null, null, null]);
+eq('Línea de solo acordes se detecta; una frase no', [L.isChordLine('G   D/F#  Em7   C'), L.isChordLine('| Am | F | C | G |'), L.isChordLine('Santo es el Señor'), L.isChordLine('La luz de Dios'), L.isChordLine('')], [true, true, false, false, false]);
+const html = L.renderLyrics('# Coro\nG        D\nSanto eres tú\n\n{Verso 1}\n[Am]Digno es [F]el Cordero', { semis: 2, flats: false });
+eq('Línea de acordes transpuesta (G D → A E) con alineación', html.includes('<div class="lyr-chords">A        E</div>'), true);
+eq('Acordes en línea [Am][F] → Bm y G, y los textos se conservan', html.includes('<b class="c">Bm</b><i>Digno es </i>') && html.includes('<b class="c">G</b><i>el Cordero</i>'), true);
+eq('Encabezados «# Coro» y «{Verso 1}» crean bloques con data-h', [...html.matchAll(/data-h="([^"]*)"/g)].map((m) => m[1]), ['coro', 'verso 1']);
+eq('«Coro:» y «Verso 2:» también son encabezados', L.splitBlocks('Coro:\nhola\nVerso 2:\nadiós').map((b) => b.heading).filter(Boolean), ['Coro', 'Verso 2']);
+eq('El HTML se escapa (nada de <script>)', L.renderLyrics('<script>alert(1)</script> & [C]x', {}).includes('<script>'), false);
+eq('Un corchete que no es acorde ([Coro]) se deja como texto', L.renderLyrics('[Coro] hola', {}).includes('[Coro] hola'), true);
+eq('prefersFlats: F y Bb sí; G y D no; Dm (relativa de F) sí', [L.prefersFlats({ root: 5, minor: false }), L.prefersFlats({ root: 10, minor: false }), L.prefersFlats({ root: 7, minor: false }), L.prefersFlats({ root: 2, minor: false }), L.prefersFlats({ root: 2, minor: true })], [true, true, false, false, true]);
+console.log(failed ? `\n${failed} de ${total} fallaron` : `\nLetras OK (${total} comprobaciones)`);
+process.exit(failed ? 1 : 0);

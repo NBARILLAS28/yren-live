@@ -233,7 +233,7 @@ input[type="range"] { accent-color: var(--cyan); }
 .tr-row input[type="text"], .tr-row select { width: 100%; padding: 5px 8px; font-size: 13px; }
 .tr-row .file { color: var(--muted); font-size: 11px; grid-column: 1 / -1; margin-top: -3px; padding-left: 4px; }
 .sections-edit { display: flex; flex-direction: column; gap: 6px; }
-.sec-row { display: grid; grid-template-columns: 1.4fr 110px 34px; gap: 8px; align-items: center; }
+.sec-row { display: grid; grid-template-columns: 1.4fr 110px 34px 34px; gap: 8px; align-items: center; }
 .sec-row input { width: 100%; padding: 5px 8px; font-size: 13px; }
 .lib-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow: auto; }
 .lib-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(5, 11, 26, 0.7); }
@@ -328,3 +328,53 @@ body.live #btnLive { background: linear-gradient(180deg, #ff5c7a, #c93658); bord
 .backup-banner { position: fixed; left: 14px; bottom: 14px; z-index: 55; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #0f2347; border: 1px solid var(--warn); color: var(--silver); padding: 10px 14px; border-radius: 12px; max-width: min(520px, 90vw); box-shadow: 0 0 18px rgba(255, 181, 71, 0.25); font-size: 13px; }
 .backup-banner[hidden] { display: none; }
 body.live .backup-banner { display: none !important; }
+
+/* ───── v0.4: vista de escenario, letras y acordes ───── */
+.dlg textarea, .dlg-body textarea { width: 100%; background: #07101f; color: var(--silver); border: 1px solid var(--line2); border-radius: 8px; padding: 8px 10px; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; resize: vertical; }
+.stage-view { position: fixed; inset: 0; z-index: 70; background: var(--bg, #040914); display: flex; flex-direction: column; padding: 14px 22px 16px; gap: 10px; }
+.stage-view[hidden] { display: none; }
+.sv-top { display: flex; align-items: center; gap: 18px; }
+.sv-title { flex: 1; min-width: 0; font-size: 28px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sv-title .muted { font-size: 14px; font-weight: 400; }
+.sv-chips { display: flex; gap: 10px; }
+.sv-chip { border: 1px solid var(--line2); border-radius: 12px; padding: 4px 18px; text-align: center; background: rgba(7, 16, 31, 0.8); }
+.sv-chip small { display: block; font-size: 10px; letter-spacing: 0.16em; color: var(--muted); }
+.sv-chip b { font-size: 34px; color: var(--cyan); line-height: 1.1; }
+.sv-btns { display: flex; gap: 8px; align-items: center; }
+.sv-now { display: flex; align-items: baseline; gap: 22px; flex-wrap: wrap; }
+.sv-sec { font-size: clamp(34px, 7vh, 64px); font-weight: 800; color: #fff; letter-spacing: 0.02em; }
+.sv-next { font-size: clamp(16px, 3vh, 26px); color: var(--warn); flex: 1; }
+.sv-clock { font-size: clamp(18px, 3vh, 28px); color: var(--muted); font-variant-numeric: tabular-nums; }
+.sv-bar { height: 8px; border-radius: 4px; background: var(--line2); overflow: hidden; flex: none; }
+.sv-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--blue), var(--cyan)); }
+.sv-notes { background: rgba(255, 181, 71, 0.12); border: 1px solid rgba(255, 181, 71, 0.5); color: var(--warn); border-radius: 10px; padding: 8px 14px; font-size: 18px; white-space: pre-wrap; }
+.sv-lyrics { position: relative; flex: 1; min-height: 0; overflow-y: auto; font-size: var(--lyr, 30px); line-height: 1.35; padding: 6px 4px 40vh; scroll-behavior: smooth; }
+.sv-lyrics:empty::before { content: 'Esta canción no tiene letra. Agrégala en Editar → «Letra, acordes y notas».'; color: var(--muted); font-size: 18px; }
+.sv-foot { display: flex; gap: 12px; justify-content: center; align-items: center; flex: none; }
+.sv-foot .btn { font-size: 16px; padding: 10px 18px; }
+.lyr-block { padding: 6px 12px; margin: 6px 0; border-left: 5px solid transparent; border-radius: 6px; }
+.lyr-block.here { background: rgba(25, 211, 255, 0.09); border-left-color: var(--cyan); }
+.lyr-head { font-size: 0.55em; letter-spacing: 0.18em; text-transform: uppercase; color: var(--warn); margin-bottom: 2px; }
+.lyr-line { display: flex; flex-wrap: wrap; align-items: flex-end; margin: 2px 0; }
+.lyr-line .cs { display: inline-flex; flex-direction: column; }
+.lyr-line .cs .c { color: var(--cyan); font-size: 0.82em; font-weight: 700; line-height: 1.15; min-height: 1.15em; }
+.lyr-line .cs i { font-style: normal; white-space: pre; }
+.lyr-chords, .lyr-text { font-family: ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; }
+.lyr-chords { color: var(--cyan); font-weight: 700; }
+.lyr-gap { height: 0.6em; }
+
+.count-badge { position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%); z-index: 80; font-size: clamp(120px, 28vh, 260px); font-weight: 800; color: var(--cyan); text-shadow: 0 0 40px rgba(25, 211, 255, 0.6); pointer-events: none; }
+.count-badge[hidden] { display: none; }
+.row-btns.genclick { gap: 16px; align-items: center; margin-top: 6px; }
+.sec-auto { grid-column: 1 / -1; background: rgba(7, 16, 31, 0.7); border: 1px dashed var(--line2); border-radius: 8px; padding: 8px 10px; margin: 2px 0 6px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 12.5px; }
+.sec-auto[hidden] { display: none; }
+.sec-auto .lbl2 { color: var(--muted); }
+.mini.has { color: var(--warn); border-color: var(--warn); }
+
+.dlg-actions { position: sticky; bottom: -20px; background: var(--panel); padding: 8px 0 2px; z-index: 2; }
+.remote-info { display: flex; gap: 14px; align-items: center; }
+.qr img { width: 150px; height: 150px; background: #fff; padding: 6px; border-radius: 8px; display: block; margin-bottom: 4px; }
+.qr:empty { display: none; }
+.midi-map { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 10px; align-items: center; font-size: 13px; }
+.midi-map .k { color: var(--cyan2); font-size: 12px; }
+.midi-map .k.wait { color: var(--warn); }

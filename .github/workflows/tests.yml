@@ -17,6 +17,8 @@ jobs:
           cache: npm
       - name: Instalar dependencias
         run: npm ci
+      - name: Letras, marcadores, MIDI y control remoto (sin navegador)
+        run: npm run test:unit
       - name: Motor de audio (Chrome headless)
         run: npm run test:engine
       - name: Interfaz completa (Chrome headless)
@@ -27,6 +29,8 @@ jobs:
         run: npm run test:v02
       - name: Servicio completo (v0.3)
         run: npm run test:v03
+      - name: Para el equipo de alabanza (v0.4)
+        run: npm run test:v04
       - name: Aplicación Electron real (xvfb)
         continue-on-error: true
         run: |
