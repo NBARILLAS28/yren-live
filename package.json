@@ -9,8 +9,8 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --mac dmg",
-    "dist:universal": "electron-builder --mac dmg --universal",
+    "dist": "electron-builder --mac dmg --publish never",
+    "dist:universal": "electron-builder --mac dmg --universal --publish never",
     "test": "node tests/unit-lyrics.mjs && node tests/unit-markers.mjs && node tests/unit-midi.mjs && node tests/run-remote.mjs && node tests/run-engine.mjs && node tests/run-ui.mjs && node tests/run-layout.mjs && node tests/run-v02.mjs && node tests/run-v03.mjs && node tests/run-v04.mjs",
     "test:engine": "node tests/run-engine.mjs",
     "test:ui": "node tests/run-ui.mjs",
