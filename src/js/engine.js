@@ -189,14 +189,19 @@ export class Engine extends EventTarget {
   async decode(blob) {
     await this.init();
     const buf = await blob.arrayBuffer();
-    return this.toMonoIfDual(await this.ctx.decodeAudioData(buf));
+    return this.toMonoIfDual(await this.ctx.decodeAudioData(buf));  // asíncrono: cede el hilo para no entrecortar la música que suena
   }
 
   /** Si los dos canales son idénticos (stem "estéreo" que en realidad es mono), guarda uno solo: mitad de memoria, mismo sonido. */
-  toMonoIfDual(buf) {
+  async toMonoIfDual(buf) {
     if (!buf || buf.numberOfChannels !== 2) return buf;
-    const a = buf.getChannelData(0), b = buf.getChannelData(1);
-    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return buf;
+    const a = buf.getChannelData(0), b = buf.getChannelData(1), STEP = 1 << 20;
+    // Se revisa por tramos y se cede el hilo entre ellos: durante un servicio, precargar la siguiente canción no debe congelar la pantalla ni los temporizadores
+    for (let s = 0; s < a.length; s += STEP) {
+      const e = Math.min(a.length, s + STEP);
+      for (let i = s; i < e; i++) if (a[i] !== b[i]) return buf;
+      if (e < a.length) await new Promise((r) => setTimeout(r, 0));
+    }
     const mono = this.ctx.createBuffer(1, buf.length, buf.sampleRate);
     mono.getChannelData(0).set(a);
     return mono;

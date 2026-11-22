@@ -120,7 +120,7 @@ try {
   // ── pedal MIDI (con mensajes simulados) y comandos externos ──
   await p.evaluate(() => window.__yren.api.selectItem(0)); await sleep(1200);
   await p.click('#btnSettings'); await p.waitForSelector('#dlgSettings[open]'); await sleep(300);
-  R.check('Ajustes: lista las 13 acciones del pedal con su botón «Aprender»', (await p.$$eval('#midiMap button', (b) => b.length)) === 13);
+  R.check('Ajustes: lista las 14 acciones del pedal con su botón «Aprender»', (await p.$$eval('#midiMap button', (b) => b.length)) === 14);
   R.check('Ajustes: el control remoto avisa que es solo de escritorio (en el navegador)', await p.$eval('#remoteNA', (e) => !e.hidden));
   await p.click('#dlgSettings button[value="close"]'); await sleep(200);
   await p.evaluate(() => { const m = window.__yren.api.midi; m.learn('toggle'); m.handle([0xb0, 64, 127]); });

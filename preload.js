@@ -18,4 +18,5 @@ contextBridge.exposeInMainWorld('yren', {
   },
   setPlaying: (v) => ipcRenderer.send('yren:playing', !!v),
   platform: process.platform,
+  systemMemMB: Number((process.argv.find((a) => a.startsWith('--yren-mem=')) || '').split('=')[1]) || 0,
 });

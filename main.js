@@ -47,6 +47,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       backgroundThrottling: false,
+      additionalArguments: ['--yren-mem=' + Math.round(os.totalmem() / 1048576)], // RAM del equipo: calcula cuánto precargar
     },
   });
   win.loadURL('yren://app/index.html');

@@ -6,7 +6,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 // Comandos que se aceptan desde el celular. Nada que borre, importe o cambie ajustes.
-const COMMANDS = new Set(['toggle', 'stop', 'next', 'prev', 'nextSec', 'prevSec', 'section', 'keyUp', 'keyDown', 'keyReset', 'tempoUp', 'tempoDown', 'tempoReset', 'fade', 'pad', 'loop', 'song']);
+const COMMANDS = new Set(['toggle', 'stop', 'next', 'prev', 'nextSec', 'prevSec', 'section', 'keyUp', 'keyDown', 'keyReset', 'tempoUp', 'tempoDown', 'tempoReset', 'fade', 'transition', 'pad', 'loop', 'song']);
 
 class RemoteServer {
   constructor({ pagePath, onCommand, maxFails = 5, lockMs = 30000 }) {

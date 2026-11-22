@@ -130,7 +130,7 @@ select:focus, input[type="text"]:focus, input[type="number"]:focus { border-colo
 .chip-v { font-size: 22px; font-weight: 800; color: var(--cyan); text-shadow: 0 0 12px rgba(25, 211, 255, 0.45); font-variant-numeric: tabular-nums; }
 
 /* ───── Transporte ───── */
-.transport { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; padding: calc(var(--pad) - 2px) 14px; }
+.transport { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: calc(var(--pad) - 2px) 14px; }
 .t-buttons { display: flex; gap: 8px; }
 .tbtn {
   width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line2); background: rgba(5, 11, 26, 0.8);
@@ -141,7 +141,7 @@ select:focus, input[type="text"]:focus, input[type="number"]:focus { border-colo
 .tbtn.play.playing { background: linear-gradient(180deg, #1a5bd6, #1347a8); color: #fff; border-color: #2a6fff; }
 .clock { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; min-width: 190px; color: #f1f6ff; }
 .clock .muted { font-size: 20px; font-weight: 500; }
-.t-sections { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.t-sections { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .seg { display: inline-flex; border: 1px solid var(--line2); border-radius: 9px; overflow: hidden; }
 .seg button { background: rgba(5, 11, 26, 0.8); color: var(--muted); border: 0; padding: 8px 12px; font: inherit; font-weight: 600; cursor: pointer; }
 .seg button.on { background: rgba(25, 211, 255, 0.16); color: var(--cyan); }
@@ -246,6 +246,12 @@ input[type="range"] { accent-color: var(--cyan); }
 .toast.err { border-color: var(--danger); box-shadow: 0 0 18px rgba(255, 92, 122, 0.3); }
 .loading { position: fixed; inset: 0; background: rgba(2, 6, 14, 0.78); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; z-index: 60; font-size: 15px; backdrop-filter: blur(3px); }
 .loading[hidden], .dropzone[hidden] { display: none; }
+/* Carga de una canción: tarjeta pequeña que NO tapa ni bloquea los controles (en vivo se sigue pudiendo parar o hacer fundido) */
+.loading.mini { inset: auto 0 18px 0; background: none; backdrop-filter: none; pointer-events: none; z-index: 40; flex-direction: row; justify-content: center; }
+.loading.mini > * { pointer-events: none; }
+.loading.mini .spinner { width: 20px; height: 20px; border-width: 2px; }
+.loading.mini #loadingText { background: rgba(5, 11, 26, 0.92); border: 1px solid var(--line2); border-radius: 999px; padding: 8px 16px; font-size: 13px; }
+.loading.mini .bar { width: 120px; }
 .spinner { width: 38px; height: 38px; border-radius: 50%; border: 3px solid var(--line2); border-top-color: var(--cyan); animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .dropzone { position: fixed; inset: 12px; border: 2px dashed var(--cyan); border-radius: 18px; background: rgba(25, 211, 255, 0.08); display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700; color: var(--cyan); z-index: 55; pointer-events: none; }

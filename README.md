@@ -3,7 +3,7 @@
 
 Reproductor de pistas (stems) para el equipo de alabanza de Dios de Pactos. App de escritorio para Mac, aparte de DDP Imagine.
 
-## Qué hace (versión 0.5)
+## Qué hace (versión 0.6)
 
 - **Importa stems** (WAV y MP3 mezclados, también M4A/AAC/FLAC/AIFF): arrastra los archivos a la ventana, usa **+ Canción (stems)** o **+ Carpeta** (una carpeta = una canción).
 - **Detecta solo** qué pista es *click* y cuál es *guía* (por el nombre del archivo) y las manda al **Monitor**; la batería/percusión no se transpone.
@@ -29,6 +29,7 @@ Reproductor de pistas (stems) para el equipo de alabanza de Dios de Pactos. App 
 | L | Bucle de la sección |
 | P | Pad ambiental encendido / apagado |
 | F | Fundido de salida |
+| T | Transición a la siguiente canción (fundido cruzado, sin parar) |
 | S | Abrir / cerrar la vista de **Escenario** |
 | Esc | Cerrar el escenario |
 | Re Pág / Av Pág | Canción anterior / siguiente |
@@ -40,7 +41,7 @@ Detalle completo en [CHANGELOG.md](CHANGELOG.md). Manual ilustrado en PDF: [docs
 ### Servicio en vivo (v0.2 – v0.3)
 - **Modo en vivo**: bloquea cambios peligrosos; al cerrar con música sonando, la app pregunta antes.
 - **Fundido de salida** (F o botón) con duración configurable, y **transición suave** entre canciones (crossfade) cuando el avance automático está activo.
-- **Precarga del setlist** con barra de progreso y presupuesto de memoria configurable.
+- **Precarga del setlist** por cercanía (actual, siguiente y anterior primero), con progreso y presupuesto de memoria **Automático** (≈40 % de la RAM) o manual. La carga al elegir una canción no tapa los controles.
 - **Reordenar el setlist arrastrando** y **duplicar setlist**.
 - **Respaldo** de toda la biblioteca en un archivo `.yrenpack` (y restaurarlo), con aviso periódico si hace tiempo que no respaldas.
 
@@ -56,7 +57,7 @@ Detalle completo en [CHANGELOG.md](CHANGELOG.md). Manual ilustrado en PDF: [docs
 - **Importar marcadores** como secciones: desde un `.txt`/`.csv` (Audacity, Reaper o lista simple `tiempo,nombre`), o automáticamente desde los **cue points** de un WAV. Tiempos aceptados: `83.5`, `1:23.5`, `0:01:23`.
 - **Automatización por sección** (botón ⚙ de cada sección): silenciar pistas y encender/apagar el pad al entrar en esa sección.
 - **Control remoto desde el celular** (solo en la app de escritorio): *Ajustes → Control remoto*. Muestra un **código QR** y un **PIN**; el celular debe estar en la **misma red Wi-Fi**. Desde el celular: reproducir/pausa, secciones, tono, tempo, bucle, pad, fundido y elegir canción. Seguridad: PIN obligatorio, bloqueo temporal tras 5 intentos fallidos y lista fija de comandos permitidos. La primera vez, macOS preguntará si permites conexiones entrantes: acepta. Si no abre en el celular, revisa *Ajustes del Sistema → Red → Firewall*.
-- **Pedal / controlador MIDI**: *Ajustes → Pedal MIDI*. Pulsa **Aprender** junto a una acción y luego pisa el botón. Acepta notas, controles (pedal ≥ 64) y cambios de programa. 13 acciones asignables: reproducir/pausa, detener, sección ±, canción ±, tono ±, tempo ±, fundido, bucle y pad. Las asignaciones se guardan.
+- **Pedal / controlador MIDI**: *Ajustes → Pedal MIDI*. Pulsa **Aprender** junto a una acción y luego pisa el botón. Acepta notas, controles (pedal ≥ 64) y cambios de programa. 14 acciones asignables: reproducir/pausa, detener, sección ±, canción ±, tono ±, tempo ±, fundido, transición, bucle y pad. Las asignaciones se guardan.
 
 ## Windows
 
@@ -113,7 +114,7 @@ Si no hay interfaz conectada, la app usa la salida del Mac: lo que está en *Mon
 - **Motor:** Web Audio + [SoundTouchJS](https://github.com/cutterbl/SoundTouchJS) (AudioWorklet) por cada pista. Electron.
 - **Latencia interna** del cambio de tonalidad: ~130 ms. Es igual para todas las pistas (siguen alineadas) y la app la compensa en los saltos entre secciones. Se mide al iniciar.
 - **Alineación entre pistas:** una pista transpuesta puede quedar unos milisegundos desfasada respecto a una que no se transpone (propio del algoritmo). Por eso la batería y el click no se transponen por defecto.
-- **Memoria:** el audio se decodifica a WAV de 32 bits en RAM. Una canción de 4 min con 10 stems estéreo usa ~800 MB; la app mantiene en memoria la canción actual y la siguiente.
+- **Memoria:** el audio se decodifica a WAV de 32 bits en RAM. Una canción de 4 min con 10 stems estéreo usa ~800 MB; la app mantiene en memoria la canción actual, la siguiente y la anterior, y el resto del setlist mientras quepa.
 - **Pruebas automáticas** (`npm test`): letras, marcadores, MIDI, control remoto, motor de audio, interfaz, diseño en varios tamaños y servicio completo v0.2–v0.4, más una prueba en Electron real. Incluyen: tonalidad exacta (+12 st = octava), el tempo no altera el tono, salto en cola a ~12 ms del final de la sección, y prueba de estrés con operaciones aleatorias sin errores.
 
 ## Pendiente / siguientes pasos

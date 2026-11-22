@@ -26,7 +26,7 @@ const state = {
     deviceId: 'default', mode: 'pairs', mainPair: 0, monitorPair: 1,
     jumpMode: 'end', autoNext: false, padMon: true, padFollow: true, padVol: 55, padRoot: 0,
     mainVol: 100, monVol: 100, live: false, deviceLabel: '',
-    fadeSec: 4, crossSec: 0, stageFont: 30, countIn: 0, countInMain: false, remoteOn: false, remotePin: '', remotePort: 8787, midiMap: {}, memBudgetMB: 1500, lastBackup: 0, backupSnooze: 0,
+    fadeSec: 4, crossSec: 0, stageFont: 30, countIn: 0, countInMain: false, remoteOn: false, remotePin: '', remotePort: 8787, midiMap: {}, memBudgetMB: 0, memMigrated: false, lastBackup: 0, backupSnooze: 0,
   },
   outLost: false,
   inflight: new Map(), // songId → promesa de decodificación en curso
@@ -49,9 +49,11 @@ function toast(msg, err = false) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), err ? 5000 : 2600);
 }
-function showLoading(text, frac) {
+/** Aviso de carga. Con { block: false } es una tarjeta pequeña abajo que NO tapa los controles: en vivo se puede seguir parando, haciendo fundido, etc. */
+function showLoading(text, frac, { block = true } = {}) {
   const el = $('loading');
   if (text == null) { el.hidden = true; $('loadingBarWrap').hidden = true; return; }
+  el.classList.toggle('mini', !block);
   $('loadingText').textContent = text;
   const w = $('loadingBarWrap');
   if (frac == null) w.hidden = true;
@@ -96,6 +98,8 @@ async function loadAll() {
   for (const s of songs) { s.tracks.forEach((t) => (t.solo = false)); state.songs.set(s.id, s); }
   state.setlists = setlists.sort((a, b) => (a.created || 0) - (b.created || 0));
   Object.assign(state.settings, settings || {});
+  // Antes el valor por defecto era 1,5 GB fijo; ahora es «Automático» (según la RAM). Se migra una sola vez.
+  if (!state.settings.memMigrated) { if (state.settings.memBudgetMB === 1500) state.settings.memBudgetMB = 0; state.settings.memMigrated = true; saveSettingsSoon(); }
   state.slId = state.setlists.find((s) => s.id === slId) ? slId : state.setlists[0] ? state.setlists[0].id : null;
 }
 
@@ -220,7 +224,19 @@ async function collectDropped(dt) {
 }
 
 // ───────────────────────── buffers (decodificados) ─────────────────────────
-const DECODE_PARALLEL = 3;
+/** Cuántos stems decodificar a la vez: más con la música parada, menos mientras suena (para no quitarle CPU al audio). */
+function decodeParallel() {
+  const cores = navigator.hardwareConcurrency || 4;
+  return engine.playing ? 2 : U.clamp(cores - 1, 2, 6);
+}
+
+/** Memoria (MB) que se puede usar para tener canciones ya decodificadas. 0 = automático: ~40 % de la RAM del equipo (mín. 1,5 GB, máx. 8 GB). */
+function memBudgetMB() {
+  const v = state.settings.memBudgetMB;
+  if (v > 0) return v;
+  const ram = (window.yren && window.yren.systemMemMB) || (navigator.deviceMemory || 4) * 1024;
+  return U.clamp(Math.round(ram * 0.4 / 100) * 100, 1500, 8000);
+}
 
 async function getBuffers(song, onProgress) {
   const running = state.inflight.get(song.id);
@@ -243,7 +259,7 @@ async function getBuffers(song, onProgress) {
       } finally { done++; if (onProgress) onProgress(done, todo.length); }
     }
   };
-  const p = Promise.all(Array.from({ length: Math.min(DECODE_PARALLEL, todo.length) }, worker));
+  const p = Promise.all(Array.from({ length: Math.min(decodeParallel(), todo.length) }, worker));
   state.inflight.set(song.id, p);
   try { await p; } finally { if (state.inflight.get(song.id) === p) state.inflight.delete(song.id); }
   return bufs;
@@ -262,9 +278,10 @@ function estSongBytes(song) {
 function renderMem() {
   const el = $('memInfo');
   if (!el) return;
-  const used = cacheBytes(), budget = state.settings.memBudgetMB * 1048576;
+  const used = cacheBytes(), budget = memBudgetMB() * 1048576;
   const loaded = [...state.songs.values()].filter(songLoaded).length;
-  el.textContent = state.cache.size ? `En memoria: ${Math.round(used / 1048576)} MB de ${state.settings.memBudgetMB} MB · ${loaded} lista${loaded === 1 ? '' : 's'}` : '';
+  const pre = state.preloadStatus ? ` · precargando “${state.preloadStatus.title}” ${state.preloadStatus.done}/${state.preloadStatus.total}…` : '';
+  el.textContent = state.cache.size ? `En memoria: ${Math.round(used / 1048576)} MB de ${memBudgetMB()} MB · ${loaded} lista${loaded === 1 ? '' : 's'}${pre}` : '';
   el.classList.toggle('high', used > budget * 0.85);
 }
 
@@ -278,7 +295,7 @@ function planPreload() {
   const sl = currentSetlist();
   const keep = new Set(), order = [];
   if (!sl) return { keep, order };
-  const budget = state.settings.memBudgetMB * 1048576;
+  const budget = memBudgetMB() * 1048576;
   let used = 0;
   const consider = (item, force) => {
     const song = item && state.songs.get(item.songId);
@@ -291,8 +308,12 @@ function planPreload() {
   };
   const cur = currentItem();
   if (cur) consider(cur, true);
-  for (let i = state.idx + 1; i < sl.items.length; i++) if (!consider(sl.items[i], false)) break;
-  if (state.idx > 0) consider(sl.items[state.idx - 1], false);
+  // Por cercanía a la canción actual: siguiente, anterior, la que sigue a la siguiente… hasta llenar la memoria
+  let fwd = true, back = true;
+  for (let d = 1; d < sl.items.length && (fwd || back); d++) {
+    if (fwd) { const j = state.idx + d; if (j >= sl.items.length || !consider(sl.items[j], false)) fwd = false; }
+    if (back) { const j = state.idx - d; if (j < 0 || !consider(sl.items[j], false)) back = false; }
+  }
   return { keep, order };
 }
 
@@ -301,13 +322,18 @@ async function preloadSetlist() {
   const { keep, order } = planPreload();
   pruneCache(keep);
   renderSongList();
-  for (const song of order) {
-    await new Promise((r) => setTimeout(r, 900));
-    if (run !== state.preloadRun) return;
-    try { await getBuffers(song); } catch (e) { console.warn('precarga', e); continue; }
-    if (run !== state.preloadRun) return;
+  const total = order.length;
+  for (let n = 0; n < total; n++) {
+    const song = order[n];
+    await new Promise((r) => setTimeout(r, 150));
+    if (run !== state.preloadRun) { state.preloadStatus = null; return; }
+    state.preloadStatus = { title: song.title, done: 0, total: song.tracks.length }; renderMem();
+    try { await getBuffers(song, (d, t) => { if (run === state.preloadRun && state.preloadStatus) { state.preloadStatus.done = d; state.preloadStatus.total = t; renderMem(); } }); }
+    catch (e) { console.warn('precarga', e); continue; }
+    if (run !== state.preloadRun) { state.preloadStatus = null; return; }
     renderSongList();
   }
+  state.preloadStatus = null; renderMem();
 }
 
 // ───────────────────────── setlists ─────────────────────────
@@ -478,10 +504,10 @@ async function selectItem(i, opts = {}) {
   state.idx = i;
   renderSongList();
   const needsDecode = !songLoaded(song);
-  if (needsDecode) showLoading(`Cargando “${song.title}”…`, 0);
+  if (needsDecode) showLoading(`Cargando “${song.title}”…`, 0, { block: false });
   try {
     await engine.init();
-    const bufs = await getBuffers(song, (d, t) => showLoading(`Cargando “${song.title}”… ${d}/${t} pistas`, d / t));
+    const bufs = await getBuffers(song, (d, t) => showLoading(`Cargando “${song.title}”… ${d}/${t} pistas`, d / t, { block: false }));
     if (token !== state.loadToken) return; // el usuario eligió otra
     song.tracks.forEach((t) => (t.solo = false));
     const cross = opts.cross > 0 && engine.playing ? opts.cross : 0;
@@ -892,6 +918,19 @@ async function togglePlay() {
   } catch (e) { console.error(e); toast('No se pudo reproducir: ' + e.message, true); }
 }
 
+/** Transición a la siguiente canción: si suena algo, entra la siguiente con fundido cruzado y sigue sonando; si no, la carga y la reproduce. */
+async function doTransition() {
+  const sl = currentSetlist();
+  if (!sl || state.idx + 1 >= sl.items.length) { toast('Es la última canción del setlist'); return; }
+  if (state.crossing) return;
+  const cross = state.settings.crossSec > 0 ? state.settings.crossSec : 4;
+  state.crossing = true;
+  try {
+    const ok = await selectItem(state.idx + 1, { cross });
+    if (ok) await playSafe();
+  } finally { state.crossing = false; }
+}
+
 function doFade() {
   if (!engine.playing) { toast('No hay nada sonando'); return; }
   if (!engine.fadeOut(state.settings.fadeSec)) toast('Ya se está haciendo el fundido');
@@ -1155,6 +1194,7 @@ function runCommand(cmd, arg) {
     case 'tempoDown': return item && setTempoPct((item.tempo || 100) - 1);
     case 'tempoReset': return item && setTempoPct(100);
     case 'fade': return doFade();
+    case 'transition': return doTransition();
     case 'pad': return togglePad();
     case 'loop': return toggleLoop();
     case 'song': return Number.isInteger(arg) && !engine.playing && selectItem(arg); // no se cambia de canción a media música
@@ -1446,7 +1486,7 @@ function populateSettings() {
   if ([...sel.options].some((o) => o.value === state.settings.deviceId)) sel.value = state.settings.deviceId; else sel.value = 'default';
   $('modeSel').value = state.settings.mode;
   $('countSel').value = String(state.settings.countIn); $('countMain').checked = !!state.settings.countInMain;
-  $('fadeSel').value = String(state.settings.fadeSec); $('crossSel').value = String(state.settings.crossSec); $('memSel').value = String(state.settings.memBudgetMB);
+  $('fadeSel').value = String(state.settings.fadeSec); $('crossSel').value = String(state.settings.crossSec); $('memSel').value = String(state.settings.memBudgetMB || 0);
   const info = engine.getInfo();
   const pairs = Math.max(1, Math.floor((info.channels || 2) / 2));
   for (const id of ['mainPair', 'monPair']) {
@@ -1537,6 +1577,7 @@ function wire() {
   $('btnEdit').addEventListener('click', () => openEdit(false));
   $('autoNext').addEventListener('change', (e) => { state.settings.autoNext = e.target.checked; applyTransitions(); saveSettingsSoon(); });
   $('btnFade').addEventListener('click', doFade);
+  $('btnTrans').addEventListener('click', doTransition);
   document.querySelectorAll('#jumpMode button').forEach((b) => b.addEventListener('click', () => {
     state.settings.jumpMode = b.dataset.mode; saveSettingsSoon(); syncJumpMode();
   }));
@@ -1724,6 +1765,7 @@ function wire() {
     else if (e.code === 'KeyS') (stage.open ? closeStage() : openStage());
     else if (e.code === 'Escape' && stage.open) closeStage();
     else if (e.code === 'KeyF') doFade();
+    else if (e.code === 'KeyT') doTransition();
     else if (e.code === 'PageDown') stepSong(1);
     else if (e.code === 'PageUp') stepSong(-1);
   });
@@ -1840,7 +1882,7 @@ async function boot() {
 }
 
 window.__yren.state = state;
-window.__yren.api = { setRemote, remoteState, runCommand, midi, midiMessage: (d) => midi.handle(d), countOpts, openStage, closeStage, stageInfo: () => ({ ...stage, blocks: stage.blocks.length }), selectItem, reorderItem, duplicateSetlist, doFade, doBackup, restoreFromFile, preloadSetlist, planPreload, cacheBytes, songLoaded, checkBackupReminder, backupDue, buildPack: () => Backup.buildPack(U.APP_VERSION) };
+window.__yren.api = { setRemote, remoteState, runCommand, midi, midiMessage: (d) => midi.handle(d), countOpts, openStage, closeStage, stageInfo: () => ({ ...stage, blocks: stage.blocks.length }), selectItem, reorderItem, duplicateSetlist, doFade, doBackup, restoreFromFile, preloadSetlist, planPreload, memBudgetMB, doTransition, cacheBytes, songLoaded, checkBackupReminder, backupDue, buildPack: () => Backup.buildPack(U.APP_VERSION) };
 window.__yren.outputLost = outputLost;
 window.__yren.outputRestored = outputRestored;
 window.__yren.playSafe = playSafe;

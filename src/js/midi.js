@@ -6,7 +6,7 @@ export const ACTIONS = [
   ['next', 'Siguiente canción'], ['prev', 'Canción anterior'],
   ['keyUp', 'Subir tono'], ['keyDown', 'Bajar tono'],
   ['tempoUp', 'Subir tempo'], ['tempoDown', 'Bajar tempo'],
-  ['fade', 'Fundido de salida'], ['loop', 'Bucle'], ['pad', 'Pad'],
+  ['fade', 'Fundido de salida'], ['transition', 'Transición a la siguiente'], ['loop', 'Bucle'], ['pad', 'Pad'],
 ];
 
 /** Clave estable de un mensaje MIDI «de pulsación», o null si no lo es (soltar, relojes, valores bajos). */

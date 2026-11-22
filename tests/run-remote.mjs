@@ -30,6 +30,8 @@ try {
   });
   R.check('Eventos en vivo: estado inicial y cada cambio llega al celular', events[0].title === 'Santo' && events[1].title === 'Digno', events.map((e) => e.title).join(', '));
   R.check('Comando válido con PIN → 200 y llega a la app', (await req('POST', '/api/cmd', { pin: '4821', body: JSON.stringify({ cmd: 'section', arg: 3 }) })).status === 200 && JSON.stringify(got[0]) === '["section",3]', JSON.stringify(got));
+  R.check('«transition» (pasar a la siguiente canción) es un comando permitido', (await req('POST', '/api/cmd', { pin: '4821', body: JSON.stringify({ cmd: 'transition' }) })).status === 200 && got[1] && got[1][0] === 'transition', JSON.stringify(got));
+  got.length = 1; // el resto de comprobaciones cuenta solo el comando «section» inicial
   R.check('Comando sin PIN → 401 y no se ejecuta', (await req('POST', '/api/cmd', { body: JSON.stringify({ cmd: 'toggle' }) })).status === 401 && got.length === 1);
   for (const bad of ['deleteSong', 'rm -rf', '__proto__', 'importFiles']) R.check(`Comando no permitido «${bad}» → 400`, (await req('POST', '/api/cmd', { pin: '4821', body: JSON.stringify({ cmd: bad }) })).status === 400);
   R.check('Ningún comando no permitido llegó a la app', got.length === 1);

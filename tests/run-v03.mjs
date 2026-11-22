@@ -33,11 +33,11 @@ try {
   R.check('Indicador de memoria visible', (await p.$eval('#memInfo', (e) => e.textContent)).includes('MB'), await p.$eval('#memInfo', (e) => e.textContent));
   const plan = await p.evaluate(() => { const s = window.__yren.state; s.settings.memBudgetMB = 1; const a = window.__yren.api.planPreload().keep.size; s.settings.memBudgetMB = 1500; const c = window.__yren.api.planPreload().keep.size; return { tiny: a, normal: c }; });
   R.check('Presupuesto de memoria: con poco espacio solo conserva la canción actual', plan.tiny === 1 && plan.normal === 3, JSON.stringify(plan));
-  const mono = await p.evaluate(() => {
+  const mono = await p.evaluate(async () => {
     const e = window.__yren.engine, ctx = e.ctx;
     const st = ctx.createBuffer(2, 4800, 48000), d = ctx.createBuffer(2, 4800, 48000);
     for (let i = 0; i < 4800; i++) { const v = Math.sin(i / 20); st.getChannelData(0)[i] = v; st.getChannelData(1)[i] = v; d.getChannelData(0)[i] = v; d.getChannelData(1)[i] = -v; }
-    return { dual: e.toMonoIfDual(st).numberOfChannels, real: e.toMonoIfDual(d).numberOfChannels };
+    return { dual: (await e.toMonoIfDual(st)).numberOfChannels, real: (await e.toMonoIfDual(d)).numberOfChannels };
   });
   R.check('Stem estéreo con dos canales idénticos se guarda en mono (mitad de memoria); uno estéreo real no se toca', mono.dual === 1 && mono.real === 2, JSON.stringify(mono));
 

@@ -81,6 +81,7 @@
           <button class="btn ghost" id="btnNextSec" title="Sección siguiente">Sección ›</button>
           <button class="btn toggle" id="btnLoop" title="Repetir la sección actual">⟳ Bucle</button>
           <button class="btn ghost" id="btnFade" title="Fundido de salida y detener (F)">↘ Fundido</button>
+          <button class="btn ghost" id="btnTrans" title="Pasa a la siguiente canción con fundido cruzado, sin parar la música (T)">⏭ Transición</button>
           <div class="seg" id="jumpMode" role="group" aria-label="Modo de salto">
             <button data-mode="end" class="on" title="El salto ocurre al terminar la sección actual">Al terminar</button>
             <button data-mode="now" title="El salto ocurre de inmediato">Ya</button>
@@ -269,7 +270,7 @@
           <select id="crossSel"><option value="0">Sin transición</option><option value="3">Suave 3 s</option><option value="5">Suave 5 s</option><option value="8">Suave 8 s</option></select>
         </label>
         <label class="field" title="Memoria máxima para tener canciones del setlist ya cargadas">Memoria para precargar
-          <select id="memSel"><option value="600">600 MB</option><option value="1000">1 GB</option><option value="1500">1.5 GB</option><option value="2500">2.5 GB</option><option value="4000">4 GB</option></select>
+          <select id="memSel"><option value="0">Automático (recomendado)</option><option value="600">600 MB</option><option value="1000">1 GB</option><option value="1500">1.5 GB</option><option value="2500">2.5 GB</option><option value="4000">4 GB</option><option value="6000">6 GB</option><option value="8000">8 GB</option></select>
         </label>
       </div>
       <div class="dlg-actions">
