@@ -2,12 +2,13 @@
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { reporter } from './lib.mjs';
 const require = createRequire(import.meta.url);
 const { RemoteServer } = require('../remote-server.js');
 const R = reporter('Control remoto');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const page = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'remote', 'remote.html');
+const page = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'remote', 'remote.html');
 const got = [];
 const srv = new RemoteServer({ pagePath: page, onCommand: (c, a) => got.push([c, a]), lockMs: 700 });
 const { port, urls } = await srv.start({ port: 0, pin: '4821' });

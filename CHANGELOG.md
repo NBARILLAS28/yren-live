@@ -1,5 +1,15 @@
 # Historial de cambios
 
+## 0.5.0 — Windows y latencia
+- **Instalador de Windows** (`.exe`, NSIS, 64 bits) con su propio flujo de GitHub Actions.
+- **Audio directo:** con tono 0 y tempo 100 % el audio no pasa por el procesador de tono (0 ms añadidos, mucha menos CPU). Cambio automático y sin cortes a la ruta procesada y de vuelta.
+- Arranque más rápido tras pulsar Play (~150 ms menos con la canción en su tono original).
+- **Corregido:** mover la posición (seek) o saltar de sección con otro tono o tempo dejaba un silencio de ~130 ms; ahora el sonido anterior continúa hasta que entra el nuevo.
+- Windows: se evita que la ventana tapada por otro programa sea tratada como oculta, y los procesos de audio suben un escalón de prioridad. El menú se oculta (Alt lo muestra).
+- ⚙ Audio muestra la latencia real (directa o procesando) y lo que añade la salida del sistema.
+- Mensajes de permiso del micrófono adaptados a Windows; un equipo sin micrófono ya no muestra un error.
+- Pruebas: arranque directo vs procesado, cambio de ruta en vivo, huecos de silencio en seek y saltos; las pruebas de rutas funcionan también en Windows.
+
 ## 0.4.0 — Equipo de alabanza
 - Letras y acordes por canción (inglesa y latina), notas del equipo y transposición con la tonalidad.
 - Vista de **Escenario** (tecla S) con auto-desplazamiento a la sección en curso.

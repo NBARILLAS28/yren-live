@@ -3,7 +3,7 @@
 
 Reproductor de pistas (stems) para el equipo de alabanza de Dios de Pactos. App de escritorio para Mac, aparte de DDP Imagine.
 
-## Qué hace (versión 0.4)
+## Qué hace (versión 0.5)
 
 - **Importa stems** (WAV y MP3 mezclados, también M4A/AAC/FLAC/AIFF): arrastra los archivos a la ventana, usa **+ Canción (stems)** o **+ Carpeta** (una carpeta = una canción).
 - **Detecta solo** qué pista es *click* y cuál es *guía* (por el nombre del archivo) y las manda al **Monitor**; la batería/percusión no se transpone.
@@ -57,6 +57,21 @@ Detalle completo en [CHANGELOG.md](CHANGELOG.md). Manual ilustrado en PDF: [docs
 - **Automatización por sección** (botón ⚙ de cada sección): silenciar pistas y encender/apagar el pad al entrar en esa sección.
 - **Control remoto desde el celular** (solo en la app de escritorio): *Ajustes → Control remoto*. Muestra un **código QR** y un **PIN**; el celular debe estar en la **misma red Wi-Fi**. Desde el celular: reproducir/pausa, secciones, tono, tempo, bucle, pad, fundido y elegir canción. Seguridad: PIN obligatorio, bloqueo temporal tras 5 intentos fallidos y lista fija de comandos permitidos. La primera vez, macOS preguntará si permites conexiones entrantes: acepta. Si no abre en el celular, revisa *Ajustes del Sistema → Red → Firewall*.
 - **Pedal / controlador MIDI**: *Ajustes → Pedal MIDI*. Pulsa **Aprender** junto a una acción y luego pisa el botón. Acepta notas, controles (pedal ≥ 64) y cambios de programa. 13 acciones asignables: reproducir/pausa, detener, sección ±, canción ±, tono ±, tempo ±, fundido, bucle y pad. Las asignaciones se guardan.
+
+## Windows
+
+Instalador: `YREN-LIVE-Setup-<versión>.exe` (Windows 10/11, 64 bits). Se obtiene en **Actions → Build YREN LIVE (Windows) → Run workflow**; al terminar, en **Artifacts → YREN-LIVE-windows** (un `.zip` con el `.exe`).
+
+- **Instalación:** al no estar firmado, Windows muestra «Windows protegió su PC». Pulsa **Más información → Ejecutar de todos modos**. Se instala solo para tu usuario, con acceso directo en el escritorio y en el menú Inicio.
+- **Control remoto:** la primera vez, el Firewall de Windows pregunta si permite la conexión: marca **Redes privadas** y *Permitir acceso*.
+- **Audio con interfaz USB (importante):** instala el **driver del fabricante** de tu interfaz y, en *Configuración → Sistema → Sonido → Propiedades del dispositivo → Formato*, elige **48 000 Hz** y el **máximo de canales** (4 para sala + monitor). Desactiva las «Mejoras de audio». Si Windows solo ofrece 2 canales, usa el modo **Dividido** (monitor a la izquierda, sala a la derecha). La app usa el audio de Windows (WASAPI); **no soporta ASIO**.
+- **Rendimiento:** plan de energía *Alto rendimiento*, equipo conectado a la corriente y sin otros programas pesados. La app sube sola la prioridad de sus procesos de audio y evita que Windows los trate como ventana oculta.
+
+### Latencia (todas las plataformas)
+
+- **Audio directo:** con la canción en su **tono original y tempo 100 %** el audio no pasa por el procesador de tono: **0 ms añadidos** y mucha menos CPU. Al cambiar tono o tempo se activa solo (añade ~130 ms) y, al volver al original, regresa a la ruta directa, siempre sin cortes.
+- Sala, monitor, click y guía salen por **el mismo dispositivo y el mismo reloj**: nunca se desfasan entre sí, sea cual sea la latencia de la salida.
+- En *⚙ Audio* se muestra la latencia actual y lo que añade la salida del sistema.
 
 ## Correrla (desarrollo)
 
