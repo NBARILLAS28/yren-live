@@ -1458,7 +1458,7 @@ function populateSettings() {
   $('pairsRow').style.display = state.settings.mode === 'pairs' ? '' : 'none';
   const w = $('outWarn');
   w.hidden = !info.warning; w.textContent = info.warning || '';
-  $('devInfo').textContent = info.ready ? `${info.channels} canales · ${Math.round(info.sampleRate / 100) / 10} kHz · latencia interna ${info.latencyMs} ms` : '';
+  $('devInfo').textContent = info.ready ? `${info.channels} canales · ${Math.round(info.sampleRate / 100) / 10} kHz · ${latencyText(info)}` : '';
 }
 
 async function applyOutputSettings() {
@@ -1474,6 +1474,12 @@ async function applyOutputSettings() {
   populateSettings(); updateOutPill();
 }
 
+/** Explica la latencia: directa (0 ms añadidos) o con el procesador de tono/tempo; más lo que añade la salida del sistema. */
+function latencyText(info) {
+  const out = info.outputMs > 0 ? ` · salida del sistema ≈ ${info.outputMs} ms` : '';
+  return (info.fast ? 'audio directo, sin latencia añadida (el procesador de tono solo se activa si cambias tono o tempo)' : `procesando tono/tempo: +${info.procMs} ms`) + out;
+}
+
 function updateOutPill() {
   const info = engine.getInfo();
   const pill = $('outPill');
@@ -1481,7 +1487,7 @@ function updateOutPill() {
   const name = devLabel(state.settings.deviceId).replace('Salida predeterminada del sistema', 'Predeterminada');
   const modeTxt = info.mode === 'pairs' ? `Sala ${state.settings.mainPair * 2 + 1}-${state.settings.mainPair * 2 + 2} · Mon ${state.settings.monitorPair * 2 + 1}-${state.settings.monitorPair * 2 + 2}` : info.mode === 'split' ? 'Dividido L=Mon R=Sala' : 'Solo principal';
   pill.textContent = `${name} · ${modeTxt}`;
-  pill.title = `${info.channels} canales · ${info.latencyMs} ms de latencia interna`;
+  pill.title = `${info.channels} canales · ${latencyText(info)}`;
   pill.className = 'status-pill ' + (info.warning ? 'warn' : 'ok');
 }
 
@@ -1490,7 +1496,11 @@ async function detectDeviceNames() {
     if (window.yren && window.yren.askMic) await window.yren.askMic();
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach((t) => t.stop());
-  } catch (e) { toast('No se concedió el permiso. Puedes elegir el dispositivo sin nombre o activar el permiso en Ajustes del Sistema → Privacidad → Micrófono.', true); }
+  } catch (e) {
+    const win = window.yren && window.yren.platform === 'win32';
+    if (e && e.name === 'NotFoundError') toast('Esta computadora no tiene micrófono: es normal. Si los nombres de las salidas no aparecen, elige por número (Dispositivo 1, 2…) o conecta la interfaz y vuelve a pulsar Detectar.', false);
+    else toast('No se concedió el permiso. Puedes elegir el dispositivo sin nombre o activar el permiso en ' + (win ? 'Configuración de Windows → Privacidad y seguridad → Micrófono (permitir apps de escritorio).' : 'Ajustes del Sistema → Privacidad → Micrófono.'), true);
+  }
   await refreshDevices();
   populateSettings();
 }

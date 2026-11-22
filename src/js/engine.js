@@ -60,6 +60,16 @@ export class Engine extends EventTarget {
 
   _emit(type, detail) { this.dispatchEvent(new CustomEvent(type, { detail })); }
 
+  // ───────────────────────── ruta directa (sin procesador de tono) ─────────────────────────
+  // Con la tonalidad en 0 y el tempo en 100 % no hace falta pasar por SoundTouch: el audio sale directo,
+  // sin latencia añadida (~130 ms menos entre pulsar Play y oír) y con mucha menos carga de CPU.
+  // El procesador solo se activa cuando se cambia tono o tempo.
+  _fastMode() { return this.fastPath !== false && this.semis === 0 && this.rate === 1; }
+  /** Latencia que tendrá una voz NUEVA creada ahora. */
+  _newLat() { return this._fastMode() ? 0 : this.latency; }
+  /** Latencia de la voz que suena ahora. */
+  _curLat() { return this.voice && this.voice.fast ? 0 : this.latency; }
+
   // ───────────────────────── inicialización y salidas ─────────────────────────
 
   async init() {
@@ -168,7 +178,10 @@ export class Engine extends EventTarget {
     return {
       ready: !!this.ctx,
       sampleRate: this.ctx ? this.ctx.sampleRate : 0,
-      latencyMs: Math.round(this.latency * 1000),
+      latencyMs: Math.round(this._newLat() * 1000),
+      procMs: Math.round(this.latency * 1000),
+      fast: this._fastMode(),
+      outputMs: this.ctx ? Math.round(((this.ctx.baseLatency || 0) + (this.ctx.outputLatency || 0)) * 1000) : 0,
       ...this.outInfo,
     };
   }
@@ -401,20 +414,25 @@ export class Engine extends EventTarget {
 
   _makeVoice(pos, when, loop = this.loop) {
     const ctx = this.ctx;
-    const v = { items: [], timer: null };
+    const fast = this._fastMode();
+    const v = { items: [], timer: null, fast };
     for (const t of this.tracks) {
       if (!t.buffer) continue;
-      const st = new SoundTouchNode({ context: ctx });
-      st.pitch.value = 1;
-      st.pitchSemitones.value = t.meta.transpose ? this.semis : 0;
-      st.playbackRate.value = this.rate;
+      let st = null;
+      if (!fast) {
+        st = new SoundTouchNode({ context: ctx });
+        st.pitch.value = 1;
+        st.pitchSemitones.value = t.meta.transpose ? this.semis : 0;
+        st.playbackRate.value = this.rate;
+      }
       const src = ctx.createBufferSource();
       src.buffer = t.buffer;
       src.playbackRate.value = this.rate;
       if (loop) { src.loop = true; src.loopStart = loop.start; src.loopEnd = loop.end; }
       const vg = ctx.createGain();
       vg.gain.value = 0;
-      src.connect(st); st.connect(vg); vg.connect(t.gain);
+      if (st) { src.connect(st); st.connect(vg); } else src.connect(vg);
+      vg.connect(t.gain);
       src.start(when, clamp(pos, 0, Math.max(0, t.buffer.duration - 0.001)));
       v.items.push({ t, src, st, vg });
     }
@@ -460,7 +478,7 @@ export class Engine extends EventTarget {
     clearTimeout(v.timer);
     v.timer = setTimeout(() => {
       for (const it of v.items) {
-        for (const n of [it.src, it.st, it.vg]) { try { n.disconnect(); } catch { /* noop */ } }
+        for (const n of [it.src, it.st, it.vg]) { try { if (n) n.disconnect(); } catch { /* noop */ } }
       }
       v.items = [];
     }, Math.max(50, seconds * 1000));
@@ -479,11 +497,12 @@ export class Engine extends EventTarget {
     if (pos >= this.song.duration - 0.05) pos = 0;
     if (this.loop && pos >= this.loop.end) { this.loop = null; this._emit('loop'); }
     const now = ctx.currentTime;
-    let when = now + 0.05, A = when + this.latency;
+    const L0 = this._newLat();
+    let when = now + (L0 > 0 ? 0.05 : 0.025), A = when + L0; // la ruta directa no crea procesadores: basta un margen corto
     const beats = Math.round(opts.countIn || 0);
     if (beats > 0 && opts.bpm > 0) {
       const beat = 60 / (opts.bpm * this.rate), t0 = now + 0.12;
-      A = t0 + beats * beat; when = A - this.latency;
+      A = t0 + beats * beat; when = A - L0;
       this._countIn(t0, beat, beats, !!opts.countInMain);
       this._emit('countin', { beats, beat, at: t0 });
     }
@@ -546,10 +565,12 @@ export class Engine extends EventTarget {
     if (this.loop && (pos < this.loop.start || pos >= this.loop.end)) this.clearLoop();
     if (!this.playing) { this.pausedPos = pos; this._emit('state'); return; }
     this._cancelPendingHard();
-    const ctx = this.ctx, now = ctx.currentTime, when = now + 0.02, A = when + this.latency;
+    const ctx = this.ctx, now = ctx.currentTime, when = now + 0.02, A = when + this._newLat();
     const v = this._makeVoice(pos, when);
     this._fadeIn(v, A);
-    if (this.voice) this._fadeOut(this.voice, A, when);
+    // La voz vieja debe seguir sonando hasta que la nueva sea audible: el procesador de tono no "vacía" su búfer
+    // al cortar la fuente, así que detener la fuente antes de A dejaba un hueco de ~130 ms.
+    if (this.voice) this._fadeOut(this.voice, A, A + 0.01);
     this.voice = v;
     this.anchor = { ctxTime: A, pos };
     this._emit('state');
@@ -557,12 +578,41 @@ export class Engine extends EventTarget {
 
   // ───────────────────────── tonalidad y tempo ─────────────────────────
 
+  /** ¿El cambio a (semis, rate) obliga a cambiar entre ruta directa y procesada con una voz sonando? */
+  _needsFlip(semis, rate) {
+    if (!this.ctx || !this.playing || !this.voice) return false;
+    const nextFast = this.fastPath !== false && semis === 0 && rate === 1;
+    return nextFast !== !!this.voice.fast;
+  }
+
+  /**
+   * Cambia entre la ruta directa y la procesada sin cortes: una voz nueva (con los ajustes nuevos) entra en
+   * fundido cruzado justo cuando la voz vieja sigue sonando, desde la misma posición audible.
+   */
+  _flipVoice(semis, rate) {
+    const ctx = this.ctx, now = ctx.currentTime;
+    const target = this.pending ? this.pending.target : null;
+    if (this.pending && !this.cancelPending()) this._cancelPendingHard(); // salto a punto de ocurrir: caso raro, se rehace
+    const newFast = this.fastPath !== false && semis === 0 && rate === 1;
+    const when = now + 0.02, A = when + (newFast ? 0 : this.latency);
+    const pos = this._posAt(A); // posición audible en A, con el tempo viejo
+    this.semis = semis; this.rate = rate;
+    const v = this._makeVoice(pos, when);
+    this._fadeIn(v, A);
+    if (this.voice) this._fadeOut(this.voice, A, A + 0.01);
+    this.voice = v;
+    this.anchor = { ctxTime: A, pos };
+    if (target !== null) this.queueJump(target);
+    this._emit('state');
+  }
+
   setTranspose(n) {
     n = clamp(Math.round(n), -12, 12);
+    if (this._needsFlip(n, this.rate)) { this._flipVoice(n, this.rate); return; }
     this.semis = n;
     for (const v of [this.voice, this.pending && this.pending.voice]) {
       if (!v) continue;
-      for (const it of v.items) it.st.pitchSemitones.value = it.t.meta.transpose ? n : 0;
+      for (const it of v.items) if (it.st) it.st.pitchSemitones.value = it.t.meta.transpose ? n : 0;
     }
     this._emit('state');
   }
@@ -571,22 +621,23 @@ export class Engine extends EventTarget {
   refreshTrackPitch() {
     for (const v of [this.voice, this.pending && this.pending.voice]) {
       if (!v) continue;
-      for (const it of v.items) it.st.pitchSemitones.value = it.t.meta.transpose ? this.semis : 0;
+      for (const it of v.items) if (it.st) it.st.pitchSemitones.value = it.t.meta.transpose ? this.semis : 0;
     }
   }
 
   setTempo(r) {
     r = clamp(r, 0.5, 1.5);
+    if (this._needsFlip(this.semis, r)) { this._flipVoice(this.semis, r); return; }
     if (this.ctx && this.playing) {
       // La posición audible sigue a la velocidad vieja hasta que el cambio llega a la salida (latencia)
-      const tA = this.ctx.currentTime + this.latency;
+      const tA = this.ctx.currentTime + this._curLat();
       const pos = this._posAt(tA);
       this.anchor = { ctxTime: tA, pos };
     }
     this.rate = r;
     for (const v of [this.voice, this.pending && this.pending.voice]) {
       if (!v) continue;
-      for (const it of v.items) { it.src.playbackRate.value = r; it.st.playbackRate.value = r; }
+      for (const it of v.items) { it.src.playbackRate.value = r; if (it.st) it.st.playbackRate.value = r; }
     }
     if (this.pending && this.ctx) this._rescheduleAfterTempo();
     this._emit('state');
@@ -604,7 +655,7 @@ export class Engine extends EventTarget {
     if (!this.song || end - start < 0.2) return false;
     if (this.playing) {
       const ctx = this.ctx;
-      const srcPos = this._posAt(ctx.currentTime + this.latency);
+      const srcPos = this._posAt(ctx.currentTime + this._curLat());
       if (srcPos >= end - 0.03 || srcPos < start) return false; // ya pasó el final del bucle en el lado "fuente"
     }
     this.loop = { start, end };
@@ -619,7 +670,7 @@ export class Engine extends EventTarget {
   clearLoop() {
     if (!this.loop) return;
     if (this.playing) {
-      const tA = this.ctx.currentTime + this.latency;
+      const tA = this.ctx.currentTime + this._curLat();
       const pos = this._posAt(tA);
       this.anchor = { ctxTime: tA, pos };
     }
@@ -643,7 +694,7 @@ export class Engine extends EventTarget {
     const cur = this.sectionIndexAt(pos);
     const end = this.loop ? this.loop.end : this.sectionEnd(Math.max(0, cur));
     const A = now + (end - pos) / this.rate; // instante AUDIBLE en que se llega al final
-    const when = A - this.latency; // instante en el lado "fuente"
+    const when = A - this._newLat(); // instante en el lado "fuente"
     if (when - now < 0.06) { this.seek(sec.start); return; }
 
     if (this.pending && !this.cancelPending()) return; // ya es demasiado tarde para cambiar el destino
@@ -664,7 +715,7 @@ export class Engine extends EventTarget {
       g.setValueAtTime(1, now);
       g.setValueAtTime(1, Math.max(now, A - 0.006));
       g.linearRampToValueAtTime(0, Math.max(now + 0.002, A + 0.004));
-      try { it.src.stop(when); } catch { /* noop */ }
+      try { it.src.stop(A + 0.01); } catch { /* noop */ } // hasta A: ver nota en seek()
     }
     this._scheduleDispose(old, (A - now) + 0.6);
   }

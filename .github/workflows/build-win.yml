@@ -1,0 +1,36 @@
+name: Build YREN LIVE (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Pruebas sin navegador (letras, marcadores, MIDI, plataforma, control remoto)
+        continue-on-error: true
+        run: npm run test:unit
+
+      - name: Construir instalador de Windows (.exe)
+        run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Subir instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: YREN-LIVE-windows
+          path: dist/*.exe
+          if-no-files-found: error

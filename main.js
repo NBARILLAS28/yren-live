@@ -1,5 +1,7 @@
 // YREN LIVE — proceso principal de Electron
 const { RemoteServer } = require('./remote-server');
+const { applySwitches, boostAudioPriority } = require('./platform');
+const os = require('os');
 const { app, BrowserWindow, Menu, protocol, session, systemPreferences, ipcMain, powerSaveBlocker, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -10,11 +12,8 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'yren', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
 
-// Audio en vivo: nada de pausas automáticas ni recortes de timers cuando la ventana está detrás.
-app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-app.commandLine.appendSwitch('disable-renderer-backgrounding');
-app.commandLine.appendSwitch('disable-background-timer-throttling');
-app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+// Audio en vivo: nada de pausas automáticas ni recortes de timers cuando la ventana está detrás (ver platform.js).
+applySwitches(app);
 
 let win = null;
 let isPlaying = false;     // lo informa la ventana (hay una canción sonando)
@@ -40,6 +39,7 @@ function createWindow() {
     minWidth: 1120,
     minHeight: 720,
     backgroundColor: '#050b1a',
+    autoHideMenuBar: process.platform === 'win32', // Alt muestra el menú; no estorba en pantalla completa
     title: 'YREN LIVE',
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
@@ -50,6 +50,8 @@ function createWindow() {
     },
   });
   win.loadURL('yren://app/index.html');
+  // Windows: los procesos de audio ya existen cuando la página termina de cargar (y se repite por si se reinician)
+  win.webContents.on('did-finish-load', () => { boostAudioPriority(app, os); setTimeout(() => boostAudioPriority(app, os), 3000); });
   win.on('close', (e) => {
     if (allowClose || !isPlaying) return;
     e.preventDefault();

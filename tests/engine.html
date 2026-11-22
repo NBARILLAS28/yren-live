@@ -30,14 +30,14 @@ window.runEngine = async function () {
   // 1) reproducir normal
   await eng.play();
   const tPlay = ctx.currentTime;
-  await sleep(1500);
+  await sleep(1300);
   R.pos_after_1_5s = +eng.getPosition().toFixed(2);
   const tn = ctx.currentTime;
   R.freq_main_orig = freqIn(recMain, tn - 0.8, tn - 0.1); // sección A: 440
   R.rms_monitor = rmsIn(recMon, tn - 0.8, tn - 0.1); R.rms_main_has_click = 'n/a';
   // 2) transponer +2 en vivo
   eng.setTranspose(2);
-  await sleep(700);
+  await sleep(550);
   const t2 = ctx.currentTime; R.pos_before_jump = +eng.getPosition().toFixed(2);
   R.freq_main_plus2 = freqIn(recMain, t2 - 0.2, t2 - 0.05); // 440*2^(2/12)=493.9
   // 3) salto en cola a la sección D (6 s): se espera estar a mitad de una sección para que el salto sea "en cola"
@@ -69,8 +69,8 @@ window.runEngine = async function () {
   R.pos_after_seek_play = +eng.getPosition().toFixed(2);
   // 7) solo/mute
   song.tracks[1].mute = true; eng.refreshMix();
-  await sleep(300);
-  const t5 = ctx.currentTime; R.rms_monitor_muted = rmsIn(recMon, t5 - 0.2, t5 - 0.05);
+  await sleep(700); // ventana de 0,5 s: con la pista sin silenciar siempre incluiría un clic (RMS ≈ 0,08)
+  const t5 = ctx.currentTime; R.rms_monitor_muted = rmsIn(recMon, t5 - 0.55, t5 - 0.05);
   // 8) salidas: modo split y pairs
   await eng.setOutput({ mode: 'split' }); R.outSplit = eng.getInfo();
   await eng.setOutput({ mode: 'pairs' }); R.outPairs = eng.getInfo();
@@ -105,6 +105,58 @@ window.runJump = async function (rate) {
   for (let i = 0; i + win < d.length; i += 50) { if (energy(i) > 0.1) { tStart = t0 + i / sr; break; } }
   for (const [t, f] of fr) { if (t > tStart + 0.5 && f > 650 && energy(Math.floor((t - t0) * sr)) > 0.1) { tSwitch = t; break; } }
   return { rate, audibleStart: +tStart.toFixed(3), switchAt: +tSwitch.toFixed(3), measuredSectionLen: +(tSwitch - tStart).toFixed(3), expectedSectionLen: +(2 / rate).toFixed(3), anchorAfter: eng.anchor, pos: +eng.getPosition().toFixed(2) };
+};
+
+
+// Ruta directa (sin procesador de tono): latencia de arranque, fundido sin cortes al activar/desactivar el procesador
+window.runFast = async function () {
+  const R = {};
+  const mkEng = async () => {
+    const eng = new Engine(); await eng.init(); const ctx = eng.ctx, sr = ctx.sampleRate, dur = 12;
+    const mk = (fn) => { const b = ctx.createBuffer(2, dur * sr, sr); for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); for (let i = 0; i < d.length; i++) d[i] = fn(i / sr); } return b; };
+    const freqs = [300, 420, 540, 660, 780, 900];
+    const music = mk(t => 0.4 * Math.sin(2 * Math.PI * freqs[Math.min(5, Math.floor(t / 2))] * t));
+    const song = { id: 'f', duration: dur, sections: [0, 2, 4, 6, 8, 10].map((s, i) => ({ id: 'f' + i, name: 'F' + i, start: s })), tracks: [{ id: 'm', name: 'm', kind: 'music', route: 'main', transpose: true, vol: 1, mute: false, solo: false }] };
+    eng.loadSong(song, new Map([['m', music]]));
+    const sp = ctx.createScriptProcessor(1024, 2, 1); const chunks = []; let t0 = null;
+    sp.onaudioprocess = (e) => { if (t0 === null) t0 = e.playbackTime; chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+    eng.mainBus.connect(sp); const z = ctx.createGain(); z.gain.value = 0; sp.connect(z); z.connect(ctx.destination);
+    const flat = () => { const n = chunks.reduce((a, c) => a + c.length, 0), o = new Float32Array(n); let k = 0; for (const c of chunks) { o.set(c, k); k += c.length; } return o; };
+    const freqIn = (a, b) => { const d = flat(); const i0 = Math.floor((a - t0) * sr), i1 = Math.floor((b - t0) * sr); let zc = 0; for (let i = i0 + 1; i < i1; i++) if (d[i - 1] < 0 && d[i] >= 0) zc++; return zc / (b - a); };
+    const minRms = (a, b) => { const d = flat(); const w = Math.floor(0.01 * sr); let m = Infinity; for (let i = Math.floor((a - t0) * sr); i + w < Math.floor((b - t0) * sr); i += w) { let e = 0; for (let j = i; j < i + w; j++) e += d[j] * d[j]; m = Math.min(m, Math.sqrt(e / w)); } return m; };
+    const onset = (after) => { const d = flat(); const i0 = Math.max(0, Math.floor((after - t0) * sr)); for (let i = i0; i < d.length; i++) if (Math.abs(d[i]) > 0.05) return t0 + i / sr; return null; };
+    return { eng, ctx, freqs, freqIn, minRms, onset };
+  };
+  // 1) latencia de arranque: directa vs procesada
+  { const { eng, ctx, onset } = await mkEng();
+    await sleep(300); const t = ctx.currentTime; await eng.play(); await sleep(500); R.fastInfo = eng.getInfo(); R.voiceFast = eng.voice.fast; R.nodesFast = eng.voice.items.filter(i => i.st).length;
+    R.startFast = +(onset(t - 0.01) - t).toFixed(3); eng.stop(); await sleep(300);
+    eng.setTranspose(2); const t2 = ctx.currentTime; await eng.play(); await sleep(600); R.voiceProc = !eng.voice.fast; R.nodesProc = eng.voice.items.filter(i => i.st).length;
+    R.startProc = +(onset(t2 - 0.01) - t2).toFixed(3); R.procInfo = eng.getInfo(); eng.stop(); }
+  // 2) directa → procesada → directa con el tempo, en vivo: la posición audible y el tono siguen coherentes y sin clics
+  { const { eng, ctx, freqs, freqIn, minRms } = await mkEng();
+    eng.seek(2.2); await eng.play(); await sleep(600);
+    const tFlip1 = ctx.currentTime; eng.setTempo(0.9);                  // directa → procesada
+    await sleep(700);
+    let p = eng.getPosition(), t = ctx.currentTime; R.afterSlow = { pos: +p.toFixed(2), freq: +freqIn(t - 0.3, t - 0.05).toFixed(0), expected: freqs[Math.min(5, Math.floor(p / 2))], fast: eng.voice.fast };
+    const tFlip2 = ctx.currentTime; eng.setTempo(1);                    // procesada → directa
+    await sleep(1000);
+    p = eng.getPosition(); t = ctx.currentTime; R.afterBack = { pos: +p.toFixed(2), freq: +freqIn(t - 0.3, t - 0.05).toFixed(0), expected: freqs[Math.min(5, Math.floor(p / 2))], fast: eng.voice.fast };
+    R.minRmsFlip1 = +minRms(tFlip1, tFlip1 + 0.45).toFixed(3); R.minRmsFlip2 = +minRms(tFlip2 - 0.15, tFlip2 + 0.45).toFixed(3); // sin huecos de silencio
+    eng.stop(); }
+  // 3) cambiar tono con salto en cola: el salto sigue ocurriendo en la frontera
+  { const { eng, ctx } = await mkEng();
+    eng.seek(0.3); await eng.play(); await sleep(400); eng.queueJump(3); R.pendBefore = eng.getPending() !== null;
+    eng.setTranspose(1); R.pendAfter = eng.getPending() !== null; R.targetKept = eng.getPending() ? eng.getPending().target : null;
+    await sleep(2200); R.posAfterJump = +eng.getPosition().toFixed(2); eng.stop(); }
+  // 4) sin huecos de silencio en seek ni en salto en cola con el procesador activo (tono +2)
+  { const { eng, ctx, minRms } = await mkEng();
+    eng.setTranspose(2); eng.seek(0.2); await eng.play(); await sleep(900);
+    const tS = ctx.currentTime; eng.seek(1.0); await sleep(900);
+    R.minRmsSeek = +minRms(tS - 0.05, tS + 0.45).toFixed(3);
+    eng.seek(2.2); await sleep(500); eng.queueJump(4); const A = eng.getPending() ? eng.getPending().A : 0; await sleep(2200);
+    R.minRmsJump = A ? +minRms(A - 0.3, A + 0.3).toFixed(3) : -1; eng.stop(); }
+  return R;
 };
 
 window.runStress = async function (seed, ms = 25000) {
