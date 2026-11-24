@@ -1,5 +1,17 @@
 # Historial de cambios
 
+## 0.7.0 — Interfaz tipo Playback
+- **Pantalla rediseñada** con la lógica de MultiTracks Playback / Prime (diseño propio, conservando el cian de YREN): sin scroll, todo a la vista desde 1120×720.
+- **Barra de transporte:** controles de **Tono** y **Tempo** (−/+ y ↺ para volver al original), reloj grande, Anterior/Play/Stop/Siguiente y los botones grandes **Fundido** y **Transición**.
+- **Canciones como tarjetas** en una tira horizontal con portada, tonalidad y BPM; **➜** en cada tarjeta para hacer la transición con fundido cruzado directo a esa canción. Reordenar arrastrando o con ◀ ▶.
+- **Portada opcional por canción** (se reduce sola a 480×270 y viaja en los respaldos `.yrenpack`). Sin portada: color e inicial.
+- **Secciones de colores** (Intro, Verso, Coro, Puente…) alineadas con la onda, que también se pinta por sección.
+- **Mezclador** con faders altos y medidor al lado; PRINCIPAL y MONITOR a la derecha.
+- **PAD con 12 teclas de nota** y «Seguir tono» / «Al monitor».
+- Las acciones del setlist (Nuevo, Renombrar, Duplicar, Eliminar) pasan al menú **⋯**.
+- Pruebas nuevas (23 comprobaciones en `run-v06`) y diseño verificado en 8 tamaños de ventana.
+- Manual actualizado con la pantalla nueva.
+
 ## 0.6.0 — Cambios de canción sin esperas
 - **Botón «⏭ Transición»** (tecla **T**, pedal MIDI y control remoto): pasa a la siguiente canción con fundido cruzado sin parar la música; si está parada, carga y reproduce la siguiente.
 - **Precarga por cercanía:** la app mantiene lista la canción actual, la siguiente y la anterior primero, y después el resto del setlist según cabe en memoria; antes solo miraba hacia adelante.

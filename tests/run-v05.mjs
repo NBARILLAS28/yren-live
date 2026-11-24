@@ -44,7 +44,7 @@ try {
     await new Promise((r) => setTimeout(r, 250));
     const el = document.getElementById('loading'), btn = document.getElementById('btnFade'), r = btn.getBoundingClientRect();
     const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    const out = { visible: !el.hidden, mini: el.classList.contains('mini'), pe: getComputedStyle(el).pointerEvents, reachable: top === btn, text: document.getElementById('loadingText').textContent };
+    const out = { visible: !el.hidden, mini: el.classList.contains('mini'), pe: getComputedStyle(el).pointerEvents, reachable: top === btn || btn.contains(top), text: document.getElementById('loadingText').textContent };
     await done; e.decode = orig; out.after = document.getElementById('loading').hidden;
     return out;
   });

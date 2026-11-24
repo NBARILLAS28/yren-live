@@ -36,7 +36,10 @@ try {
   await p.evaluate(() => window.__yren.engine.pause());
   // modo en vivo
   const vis = (sel) => p.$eval(sel, (e) => getComputedStyle(e).display !== 'none');
-  R.check('Edición: botones de borrar/editar visibles', (await vis('#btnDelSetlist')) && (await vis('#btnEdit')) && (await vis('.add-row')));
+  await p.click('#btnSetlistMenu'); await sleep(100);
+  R.check('Edición: botones de borrar/editar visibles (el menú ⋯ del setlist los muestra)', (await vis('#btnDelSetlist')) && (await p.$eval('#setlistMenu', (e) => !e.hidden)) && (await vis('#btnEdit')) && (await vis('.add-row')));
+  await p.keyboard.press('Escape'); await sleep(100);
+  R.check('Escape cierra el menú ⋯ del setlist', await p.$eval('#setlistMenu', (e) => e.hidden));
   await p.click('#btnLive'); await sleep(200);
   R.check('Modo en vivo: oculta eliminar, editar, importar y biblioteca', !(await vis('#btnDelSetlist')) && !(await vis('#btnEdit')) && !(await vis('.add-row')) && !(await vis('#btnLibrary')) && !(await vis('#btnRenameSetlist')));
   R.check('Modo en vivo: el reproductor sigue disponible', (await vis('#btnPlay')) && (await vis('#keyUp')) && (await vis('.sec-chip, #secChips')));

@@ -110,7 +110,7 @@ try {
   await sleep(300);
   const n2 = await names();
   R.check('Arrastrar y soltar una canción encima de otra cambia el orden', n2.join() === 'Cancion Uno,Cancion Dos,Cancion Tres', n2.join(', '));
-  await p.click('#btnDupSetlist'); await p.waitForSelector('#dlgText[open]'); await p.click('#txtOk'); await sleep(900);
+  await p.click('#btnSetlistMenu'); await p.click('#btnDupSetlist'); await p.waitForSelector('#dlgText[open]'); await p.click('#txtOk'); await sleep(900);
   const dup = await p.evaluate(() => { const s = window.__yren.state; return { n: s.setlists.length, name: s.setlists.find((x) => x.id === s.slId).name, items: s.setlists.find((x) => x.id === s.slId).items.length, sharedIds: s.setlists[0].items.some((i) => s.setlists[1].items.some((j) => j.id === i.id)) }; });
   R.check('Duplicar setlist crea una copia independiente con las mismas canciones', dup.n === 2 && dup.items === 3 && dup.name.startsWith('Copia de') && !dup.sharedIds, JSON.stringify(dup));
 

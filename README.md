@@ -3,7 +3,7 @@
 
 Reproductor de pistas (stems) para el equipo de alabanza de Dios de Pactos. App de escritorio para Mac, aparte de DDP Imagine.
 
-## Qué hace (versión 0.6)
+## Qué hace (versión 0.7)
 
 - **Importa stems** (WAV y MP3 mezclados, también M4A/AAC/FLAC/AIFF): arrastra los archivos a la ventana, usa **+ Canción (stems)** o **+ Carpeta** (una carpeta = una canción).
 - **Detecta solo** qué pista es *click* y cuál es *guía* (por el nombre del archivo) y las manda al **Monitor**; la batería/percusión no se transpone.
@@ -14,7 +14,8 @@ Reproductor de pistas (stems) para el equipo de alabanza de Dios de Pactos. App 
 - **Setlists**: varios, con orden editable. La tonalidad y el tempo se guardan **por canción dentro de cada setlist**.
 - **Secciones** (Intro, Verso, Coro…): márcalas mientras suena con **+ Sección aquí**. Tocar una sección programa un **salto sin cortes** al terminar la sección actual (modo *Al terminar*) o inmediato (modo *Ya*). Tocar otra vez la sección en cola cancela el salto.
 - **Bucle** de la sección actual.
-- **Pad ambiental** sintético que sigue la tonalidad de la canción (o una nota fija), con volumen propio y opción de mandarlo también al monitor.
+- **Pad ambiental** sintético con 12 teclas de nota; sigue la tonalidad de la canción o una nota fija, con volumen propio y opción de mandarlo al monitor.
+- **Interfaz tipo Playback:** tarjetas de canción con portada y botón ➜ de transición, secciones de colores sobre la onda, faders altos y barra de transporte con Tono/Tempo y reloj grande.
 - **Onda** de la canción con secciones, bucle y cabezal; clic para ir a ese punto.
 - Todo se guarda en el Mac (IndexedDB): canciones, audio, setlists y ajustes. Funciona **sin internet**.
 

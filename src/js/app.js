@@ -363,6 +363,30 @@ function itemInfo(item) {
   return { song, key, shifted: (item.transpose || 0) !== 0, bpm: Math.round(song.bpm * (item.tempo || 100) / 100) };
 }
 
+/** Color de una sección según su tipo (Intro, Verso, Coro…): el mismo en la onda y en los botones. */
+function secHue(name) {
+  const n = String(name || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  if (/^(pre|pre-?coro|prechorus)/.test(n)) return 215;
+  if (/^(intro|inicio|entrada)/.test(n)) return 160;
+  if (/^(verso|verse|estrofa|v\s?\d)/.test(n)) return 265;
+  if (/^(coro|chorus|estribillo|c\s?\d)/.test(n)) return 350;
+  if (/^(puente|bridge)/.test(n)) return 28;
+  if (/^(instrumental|interludio|solo|inter)/.test(n)) return 190;
+  if (/^(final|outro|fin|tag|cierre|remate)/.test(n)) return 48;
+  let h = 0; for (const c of n) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return h;
+}
+const titleHue = (t) => { let h = 7; for (const c of String(t || '')) h = (h * 33 + c.charCodeAt(0)) % 360; return h; };
+
+/** Pasa a la canción i como en un servicio: si suena música entra con fundido cruzado; si no, la carga y la reproduce. */
+async function goToSong(i) {
+  if (state.crossing) return;
+  const cross = engine.playing ? (state.settings.crossSec > 0 ? state.settings.crossSec : 4) : 0;
+  state.crossing = true;
+  try { const ok = await selectItem(i, cross ? { cross } : {}); if (ok) await playSafe(); }
+  finally { state.crossing = false; }
+}
+
 function renderSongList() {
   const ol = $('songList');
   ol.innerHTML = '';
@@ -370,7 +394,7 @@ function renderSongList() {
   if (!sl || !sl.items.length) {
     const li = document.createElement('li');
     li.className = 'empty';
-    li.innerHTML = 'Este setlist está vacío.<br>Agrega una canción con sus <b>stems</b> o elige una de la <b>Biblioteca</b>.';
+    li.innerHTML = 'Este setlist está vacío. Agrega una canción con sus <b>stems</b> (botón <b>+ Canción</b>), arrastra los archivos aquí o elige una de la <b>Biblioteca</b>.';
     ol.appendChild(li);
     $('setlistTotal').textContent = '';
     return;
@@ -383,31 +407,36 @@ function renderSongList() {
     const li = document.createElement('li');
     li.className = 'song-item' + (i === state.idx ? ' active' : '');
     li.innerHTML = `
-      <div class="n">${i + 1}</div>
-      <div><div class="t"></div><div class="s"></div></div>
-      <div class="badges"><span class="badge ${info.shifted ? 'shifted' : ''}">${U.keyLabel(info.key)}</span>
-        <span class="s">${info.bpm} bpm</span></div>`;
+      <div class="cover"><span class="letter"></span><span class="num">${i + 1}</span><button type="button" class="go" title="Pasar a esta canción con fundido cruzado y reproducirla">➜</button><div class="mv"></div></div>
+      <div class="cap"><span class="t"></span><span class="k ${info.shifted ? 'shifted' : ''}">(${U.keyLabel(info.key)})</span></div>
+      <div class="s"></div>`;
+    const cv = li.querySelector('.cover');
+    cv.style.setProperty('--h', titleHue(info.song.title));
+    if (info.song.cover) { cv.style.backgroundImage = `url("${info.song.cover}")`; li.querySelector('.letter').remove(); }
+    else { cv.classList.add('ph'); li.querySelector('.letter').textContent = (info.song.title.trim()[0] || '♪').toUpperCase(); }
     li.querySelector('.t').textContent = info.song.title;
-    li.querySelector('.s').textContent = (info.song.artist ? info.song.artist + ' · ' : '') + U.fmtTime(info.song.duration).replace(/\.\d$/, '');
+    li.title = `${info.song.title}${info.song.artist ? ' · ' + info.song.artist : ''}`;
+    li.querySelector('.s').textContent = `${U.fmtTime(info.song.duration).replace(/\.\d$/, '')} · ${info.bpm} bpm`;
     if (songLoaded(info.song)) {
       const ok = document.createElement('span');
       ok.className = 'rdy'; ok.textContent = '✓ lista'; ok.title = 'Ya está en memoria: suena sin esperas';
       li.querySelector('.s').appendChild(ok);
     }
     wireDrag(li, i);
-    const mv = document.createElement('div');
-    mv.className = 'mv';
-    for (const [lbl, act, title] of [['▲', 'up', 'Subir'], ['▼', 'down', 'Bajar'], ['✕', 'del', 'Quitar del setlist']]) {
+    const mv = li.querySelector('.mv');
+    for (const [lbl, act, title] of [['◀', 'up', 'Mover antes'], ['▶', 'down', 'Mover después'], ['✕', 'del', 'Quitar del setlist']]) {
       const b = document.createElement('button');
       b.className = 'mini'; b.textContent = lbl; b.title = title;
       b.addEventListener('click', (e) => { e.stopPropagation(); moveItem(i, act); });
       mv.appendChild(b);
     }
-    li.querySelector('.badges').appendChild(mv);
+    li.querySelector('.go').addEventListener('click', (e) => { e.stopPropagation(); goToSong(i); });
     li.addEventListener('click', () => selectItem(i));
     ol.appendChild(li);
   });
   $('setlistTotal').textContent = `${sl.items.length} · ${U.fmtTime(total).replace(/\.\d$/, '')}`;
+  const act = ol.querySelector('.song-item.active');
+  if (act) requestAnimationFrame(() => act.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' }));
   renderMem();
 }
 
@@ -426,14 +455,14 @@ function wireDrag(li, i) {
   li.addEventListener('dragover', (e) => {
     if (dragFrom < 0 || ![...e.dataTransfer.types].includes('text/yren-item')) return;
     e.preventDefault();
-    const r = li.getBoundingClientRect(), before = e.clientY < r.top + r.height / 2;
+    const r = li.getBoundingClientRect(), before = e.clientX < r.left + r.width / 2;
     document.querySelectorAll('.song-item.drop-before, .song-item.drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
     li.classList.add(before ? 'drop-before' : 'drop-after');
   });
   li.addEventListener('drop', (e) => {
     if (dragFrom < 0) return;
     e.preventDefault(); e.stopPropagation();
-    const r = li.getBoundingClientRect(), before = e.clientY < r.top + r.height / 2;
+    const r = li.getBoundingClientRect(), before = e.clientX < r.left + r.width / 2;
     let to = before ? i : i + 1;
     const from = dragFrom;
     if (from < to) to--;
@@ -611,6 +640,7 @@ function syncPad() {
   $('padRoot').value = s.padFollow ? root : s.padRoot;
   $('padRoot').disabled = s.padFollow;
   $('padFollow').checked = s.padFollow; $('padMon').checked = s.padMon; $('padVol').value = s.padVol;
+  document.querySelectorAll('#padGrid button').forEach((b) => b.classList.toggle('on', +b.dataset.root === root));
   if (engine.ctx) { engine.setLevel('pad', s.padVol / 100); engine.padSet({ on: state.padOn, root, toMonitor: s.padMon }); }
 }
 
@@ -626,7 +656,7 @@ function renderMixer() {
   const song = currentSong();
   if (!song) return;
   for (const t of song.tracks) box.appendChild(trackStrip(song, t));
-  box.appendChild(masterStrip('main', 'PRINCIPAL', 'Sala', 'mainVol'));
+  { const m = masterStrip('main', 'PRINCIPAL', 'Sala', 'mainVol'); m.classList.add('first'); box.appendChild(m); }
   box.appendChild(masterStrip('monitor', 'MONITOR', 'In-ears', 'monVol'));
   refreshStripStates();
 }
@@ -635,18 +665,18 @@ function trackStrip(song, t) {
   const el = document.createElement('div');
   el.className = 'strip'; el.dataset.id = t.id;
   el.innerHTML = `
-    <div class="kind">${KIND_LABEL[t.kind] || ''}</div>
-    <div class="nm"></div>
-    <div class="fader-wrap"><input type="range" class="fader" min="0" max="150" step="1"><div class="meter"><i></i></div></div>
-    <div class="db"></div>
     <div class="btn-row">
       <button class="sbtn solo" title="Solo">S</button><button class="sbtn mute" title="Silenciar">M</button><button class="sbtn tr" title="Se transpone con la canción">♯</button>
     </div>
+    <div class="fader-wrap"><input type="range" class="fader" min="0" max="150" step="1" aria-label="Volumen"><div class="meter"><i></i></div></div>
+    <div class="db"></div>
     <div class="route">
       <button data-r="main" title="Solo a la mezcla principal (sala)">PRIN</button>
       <button data-r="both" title="A principal y monitor">AMB</button>
       <button data-r="monitor" title="Solo al monitor (in-ears)">MON</button>
-    </div>`;
+    </div>
+    <div class="nm"></div>
+    <div class="kind">${KIND_LABEL[t.kind] || ''}</div>`;
   el.querySelector('.nm').textContent = t.name; el.querySelector('.nm').title = t.fileName || t.name;
   const fader = el.querySelector('.fader');
   fader.value = Math.round((t.vol ?? 1) * 100);
@@ -667,9 +697,9 @@ function masterStrip(which, title, sub, settingKey) {
   const el = document.createElement('div');
   el.className = 'strip master';
   el.innerHTML = `
-    <div class="kind">${sub}</div><div class="nm">${title}</div>
-    <div class="fader-wrap"><input type="range" class="fader" min="0" max="130" step="1"><div class="meter"><i></i></div></div>
-    <div class="db"></div>`;
+    <div class="fader-wrap"><input type="range" class="fader" min="0" max="130" step="1" aria-label="Volumen ${title.toLowerCase()}"><div class="meter"><i></i></div></div>
+    <div class="db"></div>
+    <div class="nm">${title}</div><div class="kind">${sub}</div>`;
   const fader = el.querySelector('.fader'), db = el.querySelector('.db');
   fader.value = state.settings[settingKey];
   db.textContent = dbText(fader.value / 100);
@@ -701,7 +731,7 @@ function updateMeters() {
     const [kind, id] = key.split(':');
     const p = engine.levelOf(kind === 't' ? 'track' : id, id);
     const db = p > 0.00001 ? 20 * Math.log10(p) : -90;
-    el.style.height = U.clamp((db + 54) / 54, 0, 1) * 100 + '%';
+    el.style.height = (1 - U.clamp((db + 54) / 54, 0, 1)) * 100 + '%'; // la franja oscura tapa lo que no suena
   }
 }
 
@@ -713,15 +743,22 @@ function renderSections() {
   if (!song) return;
   if (!song.sections.length) {
     const s = document.createElement('span');
-    s.className = 'muted small'; s.textContent = 'Sin secciones todavía. Reproduce y toca “+ Sección aquí” en cada cambio (Intro, Verso, Coro…).';
+    s.className = 'sec-empty'; s.textContent = 'Sin secciones todavía. Reproduce y toca “+ Sección aquí” en cada cambio (Intro, Verso, Coro…).';
     box.appendChild(s);
     return;
   }
+  const dur = song.duration || 1;
   song.sections.forEach((sec, i) => {
+    const end = i + 1 < song.sections.length ? song.sections[i + 1].start : dur;
     const b = document.createElement('button');
     b.className = 'sec-chip'; b.dataset.i = i;
-    b.innerHTML = `<span></span><small>${U.fmtTime(sec.start).replace(/\.\d$/, '')}</small>`;
+    b.style.setProperty('--h', secHue(sec.name));
+    b.style.left = (sec.start / dur) * 100 + '%';
+    b.style.width = `calc(${Math.max(0, ((end - sec.start) / dur) * 100)}% - 3px)`;
+    b.title = `${sec.name} · ${U.fmtTime(sec.start).replace(/\.\d$/, '')}`;
+    b.innerHTML = '<span></span><small></small>';
     b.firstChild.textContent = sec.name;
+    b.lastChild.textContent = U.fmtTime(sec.start).replace(/\.\d$/, '');
     b.addEventListener('click', () => onSectionClick(i));
     box.appendChild(b);
   });
@@ -855,22 +892,28 @@ function drawWave(pos) {
     g2.fillStyle = 'rgba(255,181,71,0.13)';
     g2.fillRect((engine.loop.start / dur) * cw, 0, ((engine.loop.end - engine.loop.start) / dur) * cw, ch);
   }
-  // barras
+  // bandas de color por sección y barras de la onda
+  const secs = song.sections;
+  const bandX = (i) => (secs[i].start / dur) * cw;
+  secs.forEach((sec, i) => {
+    const x0 = bandX(i), x1 = i + 1 < secs.length ? bandX(i + 1) : cw;
+    g2.fillStyle = `hsla(${secHue(sec.name)},60%,50%,0.10)`;
+    g2.fillRect(x0, 0, Math.max(1, x1 - x0), ch);
+  });
+  let si = -1;
   for (let x = 0; x < cw; x += 2) {
+    while (si + 1 < secs.length && bandX(si + 1) <= x) si++;
     const p = peaks[Math.min(peaks.length - 1, Math.floor((x / cw) * peaks.length))] || 0;
-    const h = Math.max(1, p * mid * 0.9);
-    g2.fillStyle = x < px ? '#19d3ff' : '#1b4f9c';
+    const h = Math.max(1, p * mid * 0.92);
+    const hue = si >= 0 ? secHue(secs[si].name) : 200;
+    g2.fillStyle = x < px ? `hsl(${hue},85%,64%)` : `hsl(${hue},40%,38%)`;
     g2.fillRect(x, mid - h, 1.4, h * 2);
   }
-  // secciones
-  g2.font = '600 11px system-ui'; g2.textAlign = 'left';
-  song.sections.forEach((sec, i) => {
-    const x = (sec.start / dur) * cw;
-    g2.fillStyle = 'rgba(95,230,255,0.55)';
-    g2.fillRect(x, 0, 1, ch);
-    const pend = engine.getPending();
-    g2.fillStyle = pend && pend.target === i ? '#ffb547' : '#9fb4d4';
-    g2.fillText(sec.name, x + 4, 13);
+  // líneas de sección (y el salto pendiente)
+  secs.forEach((sec, i) => {
+    const x = bandX(i), pend = engine.getPending();
+    g2.fillStyle = pend && pend.target === i ? '#ffb547' : 'rgba(255,255,255,0.28)';
+    g2.fillRect(x, 0, pend && pend.target === i ? 2 : 1, ch);
   });
   // cabezal
   g2.fillStyle = '#ffffff';
@@ -992,7 +1035,7 @@ function openEdit(isNew = false) {
     title: song.title, artist: song.artist || '', key: { ...song.key }, bpm: song.bpm,
     tracks: song.tracks.filter((t) => !t.generated).map((t) => ({ ...t })),
     sections: song.sections.map((s) => ({ ...s, mute: s.mute ? [...s.mute] : undefined })),
-    removed: [], added: false,
+    removed: [], added: false, cover: song.cover || '',
   };
   $('edGenClick').checked = song.tracks.some((t) => t.generated);
   $('edClickBeats').value = String(song.clickBeats || 4);
@@ -1007,7 +1050,7 @@ function openEdit(isNew = false) {
   $('edBpm').value = song.bpm;
   $('edDur').value = U.fmtTime(song.duration);
   $('edLyrics').value = song.lyrics || ''; $('edNotes').value = song.notes || '';
-  renderEditTracks(); renderEditSections();
+  renderEditTracks(); renderEditSections(); renderEditCover();
   $('dlgEdit').showModal();
   if (isNew) $('edTitle').select();
 }
@@ -1091,8 +1134,28 @@ function renderEditSections() {
   });
 }
 
+function renderEditCover() {
+  const es = editState, box = $('edCoverPrev');
+  box.style.backgroundImage = es.cover ? `url("${es.cover}")` : '';
+  box.classList.toggle('ph', !es.cover);
+  box.textContent = es.cover ? '' : (($('edTitle').value.trim()[0] || '♪').toUpperCase());
+  $('edCoverClear').hidden = !es.cover;
+}
+
+/** Reduce la imagen elegida a 480×270 (recortada al centro) para que ocupe poco y se vea nítida en la tarjeta. */
+async function fileToCover(file) {
+  const bmp = await createImageBitmap(file);
+  const W = 480, H = 270, c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const k = Math.max(W / bmp.width, H / bmp.height), w = bmp.width * k, h = bmp.height * k;
+  c.getContext('2d').drawImage(bmp, (W - w) / 2, (H - h) / 2, w, h);
+  if (bmp.close) bmp.close();
+  return c.toDataURL('image/jpeg', 0.82);
+}
+
 async function applyEdit() {
   const es = editState, song = es.song;
+  if (es.cover) song.cover = es.cover; else delete song.cover;
   song.title = $('edTitle').value.trim() || song.title;
   song.artist = $('edArtist').value.trim();
   song.key = { root: +$('edKeyRoot').value, minor: $('edKeyMinor').checked };
@@ -1591,9 +1654,25 @@ function wire() {
   $('tempoReset').addEventListener('click', () => setTempoPct(100));
   $('tempoRange').addEventListener('input', (e) => setTempoPct(+e.target.value));
 
+  // menú de opciones del setlist (nuevo, renombrar, duplicar, eliminar)
+  { const menu = $('setlistMenu'), mb = $('btnSetlistMenu');
+    const closeMenu = () => { menu.hidden = true; mb.setAttribute('aria-expanded', 'false'); };
+    mb.addEventListener('click', (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; mb.setAttribute('aria-expanded', String(!menu.hidden)); });
+    menu.addEventListener('click', () => setTimeout(closeMenu, 0));
+    document.addEventListener('click', (e) => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) closeMenu(); }); }
+
   // pad
   const rootSel = $('padRoot');
   U.ROOT_OPTIONS.forEach((n, i) => { const o = document.createElement('option'); o.value = i; o.textContent = n; rootSel.appendChild(o); });
+  const grid = $('padGrid');
+  U.ROOT_OPTIONS.forEach((n, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.root = i; b.textContent = U.keyLabel({ root: i, minor: false });
+    b.title = 'Tocar el pad en esta nota (deja de seguir la tonalidad de la canción)';
+    b.addEventListener('click', () => { state.settings.padRoot = i; state.settings.padFollow = false; saveSettingsSoon(); syncPad(); });
+    grid.appendChild(b);
+  });
   $('padToggle').addEventListener('click', togglePad);
   $('padMon').addEventListener('change', (e) => { state.settings.padMon = e.target.checked; saveSettingsSoon(); syncPad(); });
   $('padFollow').addEventListener('change', (e) => { state.settings.padFollow = e.target.checked; saveSettingsSoon(); syncPad(); });
@@ -1660,6 +1739,15 @@ function wire() {
     else if (es.added && currentSong() === es.song) await selectItem(state.idx); // se agregaron pistas aunque se cerró sin guardar
     editState = null;
   });
+  $('edCoverPick').addEventListener('click', () => $('edCoverInput').click());
+  $('edCoverInput').addEventListener('change', async (e) => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f || !editState) return;
+    try { editState.cover = await fileToCover(f); renderEditCover(); }
+    catch (err) { toast('No se pudo leer esa imagen: ' + err.message, true); }
+  });
+  $('edCoverClear').addEventListener('click', () => { if (editState) { editState.cover = ''; renderEditCover(); } });
+  $('edTitle').addEventListener('input', () => { if (editState && !editState.cover) renderEditCover(); });
   $('edAddSection').addEventListener('click', () => {
     const pos = engine.getPosition();
     editState.sections.push({ id: U.uid(), name: 'Sección', start: Math.round(pos * 100) / 100 });
@@ -1771,6 +1859,7 @@ function wire() {
   });
 
   window.addEventListener('resize', resizeCanvas);
+  if (window.ResizeObserver) new ResizeObserver(() => resizeCanvas()).observe(canvas); // la altura de la onda se adapta al espacio libre
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
     navigator.mediaDevices.addEventListener('devicechange', async () => {
       await refreshDevices();
@@ -1882,7 +1971,7 @@ async function boot() {
 }
 
 window.__yren.state = state;
-window.__yren.api = { setRemote, remoteState, runCommand, midi, midiMessage: (d) => midi.handle(d), countOpts, openStage, closeStage, stageInfo: () => ({ ...stage, blocks: stage.blocks.length }), selectItem, reorderItem, duplicateSetlist, doFade, doBackup, restoreFromFile, preloadSetlist, planPreload, memBudgetMB, doTransition, cacheBytes, songLoaded, checkBackupReminder, backupDue, buildPack: () => Backup.buildPack(U.APP_VERSION) };
+window.__yren.api = { setRemote, remoteState, runCommand, midi, midiMessage: (d) => midi.handle(d), countOpts, openStage, closeStage, stageInfo: () => ({ ...stage, blocks: stage.blocks.length }), selectItem, reorderItem, duplicateSetlist, doFade, doBackup, restoreFromFile, preloadSetlist, planPreload, memBudgetMB, doTransition, goToSong, secHue, cacheBytes, songLoaded, checkBackupReminder, backupDue, buildPack: () => Backup.buildPack(U.APP_VERSION) };
 window.__yren.outputLost = outputLost;
 window.__yren.outputRestored = outputRestored;
 window.__yren.playSafe = playSafe;
